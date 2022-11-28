@@ -1,0 +1,5 @@
+.idea
+.DS_Store
+*.exe
+cmd/nats-service/nats-service
+cmd/requester/requester
