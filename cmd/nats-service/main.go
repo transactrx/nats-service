@@ -13,9 +13,11 @@ import (
 
 func getTime(msg *nats_service.NatsMessage) error {
 	s := fmt.Sprintf("The time is %s", time.Now())
-	msg.ResponseBody = []byte(s)
 
 	msg.Logger.Printf("received a message")
+	msg.ResponseBody = []byte(s)
+
+	msg.Logger.Printf("completed function ")
 
 	return nil
 }
