@@ -1,11 +1,9 @@
 package nats_service
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"log"
 	"os"
@@ -17,8 +15,6 @@ type NatService struct {
 	url          string
 	nc           *nats.Conn
 	subscription *nats.Subscription
-	pool         *pgxpool.Pool
-	readOnlyPool *pgxpool.Pool
 	endPoints    []*NatsEndpoint
 	basePath     string
 	queueName    string
@@ -47,8 +43,6 @@ func New(basePath string) (*NatService, error) {
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
 	natsKey := os.Getenv("NATS_KEY")
-	dbReadWriteURL := os.Getenv("DB_RW_URL")
-	dbReadOnlyURL := os.Getenv("DB_RO_URL")
 	natsQueueName := os.Getenv("NATS_QUEUE_NAME")
 
 	if natsUrl == "" {
@@ -63,34 +57,14 @@ func New(basePath string) (*NatService, error) {
 		return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", ConfigError)
 	}
 
-	if dbReadWriteURL == "" {
-		return nil, fmt.Errorf("environment variable DB_RW_URL is missing: %w", ConfigError)
-	}
-
-	if dbReadOnlyURL == "" {
-		return nil, fmt.Errorf("environment variable DB_RO_URL is missing: %w", ConfigError)
-	}
-
 	if natsQueueName == "" {
 		return nil, fmt.Errorf("environment variable NATS_QUEUE_NAME is missing: %w", ConfigError)
 	}
 
-	//	create the connection pool
-	readWritePool, err := pgxpool.New(context.Background(), dbReadWriteURL)
-	if err != nil {
-		return nil, fmt.Errorf("unable to connect to read write database: %w", err)
-	}
-
-	//	create the read only connection pool
-	readOnlyPool, err := pgxpool.New(context.Background(), dbReadOnlyURL)
-	if err != nil {
-		return nil, fmt.Errorf("unable to connect to read only database: %w", err)
-	}
-
-	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey, readWritePool, readOnlyPool)
+	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey)
 }
 
-func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, readWritePool, readOnlyPool *pgxpool.Pool) (*NatService, error) {
+func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string) (*NatService, error) {
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
@@ -103,12 +77,10 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, re
 	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
 
 	ns := NatService{
-		url:          natsUrl,
-		nc:           nc,
-		pool:         readWritePool,
-		readOnlyPool: readOnlyPool,
-		basePath:     basePath,
-		queueName:    natsQueueName,
+		url:       natsUrl,
+		nc:        nc,
+		basePath:  basePath,
+		queueName: natsQueueName,
 	}
 
 	return &ns, nil
@@ -146,8 +118,11 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 
 func (ns *NatService) Start() error {
 
-	subscribe, err := ns.nc.QueueSubscribe(ns.basePath+".>", ns.queueName, func(msg *nats.Msg) {
+	if len(ns.endPoints) == 0 {
+		return fmt.Errorf("no endpoints configured")
+	}
 
+	subscribe, err := ns.nc.QueueSubscribe(ns.basePath+".>", ns.queueName, func(msg *nats.Msg) {
 		for _, endPoint := range ns.endPoints {
 			if endPoint.regex.MatchString(msg.Subject) {
 				go handleEndpointCall(endPoint, msg)
