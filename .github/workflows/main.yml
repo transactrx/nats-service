@@ -12,6 +12,7 @@ jobs:
         goos: [linux, windows, darwin]
         goarch: ["arm64", amd64]
     steps:
+    - working-directory: ./cmd/nats-service
     - uses: actions/checkout@v2
     - uses: wangyoucao577/go-release-action@master
       with:
