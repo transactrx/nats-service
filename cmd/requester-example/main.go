@@ -9,9 +9,6 @@ import (
 )
 
 func main() {
-
-	frank
-
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
 	natsKey := os.Getenv("NATS_KEY")
