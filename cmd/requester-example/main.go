@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"github.com/nats-io/nats.go"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
 	"log"
@@ -31,7 +30,7 @@ func main() {
 	opts = nats_service.SetupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
-		fmt.Printf("\n%s Connect failed error: %s", err)
+		log.Printf("Connect failed error: %v", err)
 	}
 
 	if err != nil {
