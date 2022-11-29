@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
 	"log"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-func getTime(msg *nats_service.NatsMessage) error {
+func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 	s := fmt.Sprintf("The time is %s", time.Now())
 
 	msg.Logger.Printf("received a message")
@@ -22,6 +23,13 @@ func getTime(msg *nats_service.NatsMessage) error {
 	return nil
 }
 
+func getTimeError(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+
+	natsError := nats_service.NewValidationError("crap", 500, errors.New("this is great"))
+
+	return &natsError
+}
+
 func main() {
 
 	natservice, err := nats_service.New("rx.api")
@@ -30,7 +38,8 @@ func main() {
 		log.Panicln(err)
 	}
 
-	natservice.AddEndpoint("getTime", getTime)
+	natservice.AddEndpoint("getTime/.*", getTime)
+	natservice.AddEndpoint("getTimeError", getTimeError)
 
 	err = natservice.Start()
 	if err != nil {

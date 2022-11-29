@@ -1,5 +1,5 @@
 .idea
 .DS_Store
 *.exe
-cmd/nats-service/nats-service
-cmd/requester/requester
+cmd/nats-service-example/nats-service
+cmd/requester-example/requester

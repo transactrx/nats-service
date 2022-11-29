@@ -43,6 +43,7 @@ func main() {
 	//}
 
 	makeFetchClientCall(nc)
+	makeFetchClientCallError(nc)
 
 	//runtime.Goexit()
 }
@@ -60,7 +61,21 @@ func makeFetchClientCall(nc *nats.Conn) {
 
 	requestMsg := nats.Msg{}
 	requestMsg.Header = nats.Header{}
-	requestMsg.Subject = "rx.api.getTime"
+	requestMsg.Subject = "rx.api.getTime/utc"
+
+	msg, err := nc.RequestMsg(&requestMsg, time.Second*10)
+	if err != nil {
+		log.Printf("error: %v", err)
+	}
+
+	log.Printf("Reply: %s", msg.Data)
+}
+
+func makeFetchClientCallError(nc *nats.Conn) {
+
+	requestMsg := nats.Msg{}
+	requestMsg.Header = nats.Header{}
+	requestMsg.Subject = "rx.api.getTimeError"
 
 	msg, err := nc.RequestMsg(&requestMsg, time.Second*10)
 	if err != nil {

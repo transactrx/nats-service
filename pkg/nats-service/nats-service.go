@@ -1,6 +1,7 @@
 package nats_service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"time"
 )
+
+const MESSAGE_ID = "MESSAGE_ID"
 
 type NatService struct {
 	url          string
@@ -25,6 +28,7 @@ type NatsMessage struct {
 	Header         nats.Header
 	Path           string
 	ResponseBody   []byte
+	MessageId      string
 	ResponseHeader nats.Header
 	Logger         *log.Logger
 }
@@ -35,7 +39,7 @@ type NatsEndpoint struct {
 	regex        *regexp.Regexp
 }
 
-type NatsEndpointFunc func(msg *NatsMessage) error
+type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
 
 var ConfigError = errors.New("configuration error")
 
@@ -98,7 +102,7 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
 	}
 
-	fullPath := ns.basePath + "." + path
+	fullPath := "^" + ns.basePath + "." + path + "$"
 
 	reg, err := regexp.Compile(fullPath)
 	if err != nil {
@@ -146,11 +150,20 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 
 	startTime := time.Now().UnixMicro()
 
+	var messageId string
+
+	if msg.Header != nil && msg.Header.Get(MESSAGE_ID) != "" {
+		messageId = msg.Header.Get(MESSAGE_ID)
+	} else {
+		messageId = uuid.New().String()
+	}
+
 	natsMessage := NatsMessage{
-		Body:   msg.Data,
-		Header: msg.Header,
-		Path:   msg.Subject,
-		Logger: log.New(os.Stdout, uuid.New().String()+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix),
+		Body:      msg.Data,
+		Header:    msg.Header,
+		Path:      msg.Subject,
+		MessageId: messageId,
+		Logger:    log.New(os.Stdout, messageId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix),
 	}
 
 	err := endPoint.endPointFunc(&natsMessage)
@@ -162,13 +175,25 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 	responseMsg := nats.Msg{}
 
 	var status string
+	var responseMsgLog []byte
 
 	if err != nil {
-		status = "500"
+		status = fmt.Sprintf("%d", err.Status)
 		responseMsg.Header = nats.Header{}
 
 		responseMsg.Header.Set("status", status)
-		responseMsg.Data = []byte(fmt.Sprintf("oops: %v", err))
+		responseMsg.Header.Set(MESSAGE_ID, messageId)
+
+		jsonBA, jsonError := json.Marshal(err)
+
+		errorMsg := fmt.Sprintf("error creating json from response: %v", jsonError)
+
+		if jsonError != nil {
+			natsMessage.Logger.Print(errorMsg)
+			responseMsg.Data = []byte(errorMsg)
+		} else {
+			responseMsg.Data = jsonBA
+		}
 	} else {
 		status = "200"
 
@@ -180,14 +205,21 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 
 		responseMsg.Data = natsMessage.ResponseBody
 		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(MESSAGE_ID, messageId)
 	}
 
-	err = msg.RespondMsg(&responseMsg)
-	if err != nil {
-		natsMessage.Logger.Printf("error returning response: %v", err)
+	if len(responseMsg.Data) <= 1024 {
+		responseMsgLog = responseMsg.Data
+	} else {
+		responseMsgLog = responseMsg.Data[:1024]
 	}
 
-	natsMessage.Logger.Printf("api call completed: %s, elapsed time: %d, subject: %s", status, elapsedTime, msg.Subject)
+	errResponding := msg.RespondMsg(&responseMsg)
+	if errResponding != nil {
+		natsMessage.Logger.Printf("error returning response: %v", errResponding)
+	}
+
+	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, msgBody: %s", status, elapsedTime, msg.Subject, responseMsgLog)
 }
 
 func handleEndpointNotFound(msg *nats.Msg) {
