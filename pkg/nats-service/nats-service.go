@@ -75,7 +75,7 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string) (*
 	opts = SetupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
-		log.Printf("%s Connect failed error: %s", err)
+		log.Printf("%s Connect failed error: %s", time.Now(), err)
 		return nil, err
 	}
 	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
