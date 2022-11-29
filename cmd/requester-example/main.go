@@ -11,6 +11,7 @@ import (
 func main() {
 
 	frank
+	manuel
 
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
