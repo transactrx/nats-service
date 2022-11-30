@@ -13,7 +13,7 @@ import (
 )
 
 func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
-	
+
 	s := fmt.Sprintf("The time is %s", time.Now())
 
 	msg.Logger.Printf("received a message")
@@ -26,7 +26,7 @@ func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 
 func getTimeError(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 
-	natsError := nats_service.NewValidationError("crap", 500, errors.New("this is great"))
+	natsError := nats_service.NewValidationError("this is the error message", 2500, errors.New("this is an exception - usually nil"))
 
 	return &natsError
 }

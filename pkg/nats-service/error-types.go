@@ -35,3 +35,11 @@ func NewAuthorizationError(errorMessage string, apiStatusCode int, err error) Na
 		InternalErr:   fmt.Sprintf("%v", err),
 	}
 }
+
+func NewEndpointNotFoundError(subject string) NatsServiceError {
+	return NatsServiceError{
+		Status:        404,
+		ErrorMessage:  fmt.Sprintf("subject: %s not found", subject),
+		ApiStatusCode: 404,
+	}
+}

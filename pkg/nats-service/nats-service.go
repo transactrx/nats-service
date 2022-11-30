@@ -72,7 +72,7 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string) (*
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
-	opts = SetupConnOptions(opts)
+	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
 		log.Printf("%s Connect failed error: %s", time.Now(), err)
@@ -227,7 +227,16 @@ func handleEndpointNotFound(msg *nats.Msg) {
 	responseMsg.Header = nats.Header{}
 
 	responseMsg.Header.Set("status", "404")
-	responseMsg.Data = []byte(fmt.Sprintf("endpoint not found"))
+	notFoundError := NewEndpointNotFoundError(msg.Subject)
+
+	errorText, err := json.Marshal(notFoundError)
+
+	if err != nil {
+		errorText = []byte("unable to marshall EndpointNotFoundError")
+		log.Printf("%s", errorText)
+	}
+
+	responseMsg.Data = errorText
 	msg.RespondMsg(&responseMsg)
 }
 
@@ -235,7 +244,7 @@ func (ns *NatService) Shutdown() error {
 	return ns.subscription.Drain()
 }
 
-func SetupConnOptions(opts []nats.Option) []nats.Option {
+func setupConnOptions(opts []nats.Option) []nats.Option {
 	totalWait := 15 * time.Minute
 	reconnectDelay := time.Second
 	opts = append(opts, nats.ReconnectWait(reconnectDelay))
