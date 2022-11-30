@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"time"
 )
-asdsad
 
 const MESSAGE_ID = "MESSAGE_ID"
 
