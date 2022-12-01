@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const MESSAGE_ID = "MESSAGE_ID"
+
 type Client struct {
 	nc *nats.Conn
 }
@@ -58,16 +60,22 @@ func NewLowLevelClient(natsUrl, natsToken, natsKey string) (*Client, error) {
 	return &client, nil
 }
 
-func (cl *Client) DoRequest(subject string, header Header, data []byte, timeout time.Duration) (*NatsResponseMessage, *nats_service.NatsServiceError, error) {
+func (cl *Client) DoRequest(correlationId, subject string, header Header, data []byte, timeout time.Duration) (*NatsResponseMessage, *nats_service.NatsServiceError, error) {
 	requestMsg := nats.Msg{}
 
-	if header != nil && len(header) > 0 {
+	if (header != nil && len(header) > 0) || correlationId != "" {
 		requestMsg.Header = nats.Header{}
-		for key, values := range header {
-			for _, value := range values {
-				requestMsg.Header.Add(key, value)
+		if correlationId != "" {
+			requestMsg.Header.Set(MESSAGE_ID, correlationId)
+		}
+		if header != nil {
+			for key, values := range header {
+				for _, value := range values {
+					requestMsg.Header.Add(key, value)
+				}
 			}
 		}
+
 	}
 
 	requestMsg.Subject = subject
