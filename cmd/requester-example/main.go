@@ -21,7 +21,7 @@ func main() {
 }
 
 func exampleWithOutExceptions(client *nats_service_client.Client) {
-	rspMsg, svcErr, err := client.DoRequest("rx.api.getTime/utc", nil, nil, time.Second*10)
+	rspMsg, svcErr, err := client.DoRequest("id13213", "rx.api.getTime/utc", nil, nil, time.Second*10)
 
 	//	error connecting to service
 	if err != nil {
@@ -41,7 +41,7 @@ func exampleWithOutExceptions(client *nats_service_client.Client) {
 }
 
 func exampleWithExceptions(client *nats_service_client.Client) {
-	rspMsg, svcErr, err := client.DoRequest("rx.api.DOES_NOT_EXIST", nil, nil, time.Second*10)
+	rspMsg, svcErr, err := client.DoRequest("id13213", "rx.api.DOES_NOT_EXIST", nil, nil, time.Second*10)
 
 	//	error connecting to service
 	if err != nil {
@@ -61,7 +61,7 @@ func exampleWithExceptions(client *nats_service_client.Client) {
 }
 
 func exampleAPIProducesError(client *nats_service_client.Client) {
-	rspMsg, svcErr, err := client.DoRequest("rx.api.getTimeError", nil, nil, time.Second*10)
+	rspMsg, svcErr, err := client.DoRequest("id13213", "rx.api.getTimeError", nil, nil, time.Second*10)
 
 	//	error connecting to service
 	if err != nil {
