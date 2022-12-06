@@ -44,26 +44,10 @@ type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
 var ConfigError = errors.New("configuration error")
 
 func New(basePath string) (*NatService, error) {
-	natsUrl := os.Getenv("NATS_URL")
-	natsToken := os.Getenv("NATS_JWT")
-	natsKey := os.Getenv("NATS_KEY")
-	natsQueueName := os.Getenv("NATS_QUEUE_NAME")
-
-	if natsUrl == "" {
-		return nil, fmt.Errorf("environment variable NATS_URL is missing: %w", ConfigError)
-	}
-
-	if natsToken == "" {
-		return nil, fmt.Errorf("environment variable NATS_JWT is missing: %w", ConfigError)
-	}
-
-	if natsKey == "" {
-		return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", ConfigError)
-	}
-
-	if natsQueueName == "" {
-		return nil, fmt.Errorf("environment variable NATS_QUEUE_NAME is missing: %w", ConfigError)
-	}
+	natsUrl := getEnvironmentVariableOrPanic("NATS_URL")
+	natsToken := getEnvironmentVariableOrPanic("NATS_JWT")
+	natsKey := getEnvironmentVariableOrPanic("NATS_KEY")
+	natsQueueName := getEnvironmentVariableOrPanic("NATS_QUEUE_NAME")
 
 	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey)
 }
@@ -213,13 +197,19 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 	} else {
 		responseMsgLog = responseMsg.Data[:1024]
 	}
+	var reqMsgLog []byte
+	if len(msg.Data) > 1024 {
+		reqMsgLog = msg.Data[:1024]
+	} else {
+		reqMsgLog = msg.Data
+	}
 
 	errResponding := msg.RespondMsg(&responseMsg)
 	if errResponding != nil {
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
 
-	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, msgBody: %s", status, elapsedTime, msg.Subject, responseMsgLog)
+	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, req:%s, resp: %s", status, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
 }
 
 func handleEndpointNotFound(msg *nats.Msg) {
@@ -261,4 +251,12 @@ func setupConnOptions(opts []nats.Option) []nats.Option {
 	}))
 
 	return opts
+}
+
+func getEnvironmentVariableOrPanic(key string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Panicf("Environment variable %s is missing", key)
+	}
+	return value
 }
