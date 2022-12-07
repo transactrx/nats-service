@@ -3,6 +3,7 @@ package nats_service_client
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
 	"log"
@@ -66,8 +67,9 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	if (header != nil && len(header) > 0) || correlationId != "" {
 		requestMsg.Header = nats.Header{}
 		if correlationId != "" {
-			requestMsg.Header.Set(MESSAGE_ID, correlationId)
+			correlationId = uuid.New().String()
 		}
+		requestMsg.Header.Set(MESSAGE_ID, correlationId)
 		if header != nil {
 			for key, values := range header {
 				for _, value := range values {
@@ -77,6 +79,7 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 		}
 
 	}
+	logger := log.New(os.Stdout, correlationId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix)
 
 	requestMsg.Subject = subject
 	requestMsg.Data = data
@@ -84,6 +87,8 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	var natsError *nats_service.NatsServiceError
 	var natsResultMsg *NatsResponseMessage
 
+	logger.Printf("Sending request to %s", subject)
+	startTime := time.Now().UnixMicro()
 	msg, err := cl.nc.RequestMsg(&requestMsg, timeout)
 	if err == nil {
 		var status string
@@ -97,6 +102,7 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 				Data:   msg.Data,
 				Header: convertNatsHeaderToHeader(msg.Header),
 			}
+			logger.Printf("Request successfully completed in %dμs", time.Now().UnixMicro()-startTime)
 		} else {
 			//	error condition
 			natsError = &nats_service.NatsServiceError{}
@@ -104,7 +110,10 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 			if parsError != nil {
 				err = fmt.Errorf("invalid response from service: %s, %w", msg.Data, parsError)
 			}
+			logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, natsError)
 		}
+	} else {
+		logger.Printf("Request failed to start in %dμs with error: %v", time.Now().UnixMicro()-startTime, err)
 	}
 
 	return natsResultMsg, natsError, err
