@@ -8,6 +8,7 @@ import (
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -64,9 +65,10 @@ func NewLowLevelClient(natsUrl, natsToken, natsKey string) (*Client, error) {
 func (cl *Client) DoRequest(correlationId, subject string, header Header, data []byte, timeout time.Duration) (*NatsResponseMessage, *nats_service.NatsServiceError, error) {
 	requestMsg := nats.Msg{}
 
-	if correlationId == "" {
+	if strings.Trim(correlationId, " ") == "" {
 		correlationId = uuid.New().String()
 	}
+	log.Printf("corrolationId: %s", correlationId)
 
 	requestMsg.Header = nats.Header{}
 	requestMsg.Header.Set(MESSAGE_ID, correlationId)
