@@ -1,6 +1,8 @@
 package nats_service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,6 +212,18 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 	}
 
 	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, req:%s, resp: %s", status, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+}
+
+// compress byte array using gzip
+func compress(body []byte) []byte {
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	_, err := w.Write(body)
+	if err != nil {
+		log.Println(err)
+	}
+	w.Close()
+	return b.Bytes()
 }
 
 func handleEndpointNotFound(msg *nats.Msg) {
