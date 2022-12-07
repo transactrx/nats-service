@@ -110,10 +110,10 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 			if parsError != nil {
 				err = fmt.Errorf("invalid response from service: %s, %w", msg.Data, parsError)
 			}
-			logger.Printf("Request failed in %dμs with error: %s", time.Now().UnixMicro()-startTime, natsError)
+			logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, natsError)
 		}
 	} else {
-		logger.Printf("Request failed to start in %dμs with error: %s", time.Now().UnixMicro()-startTime, err)
+		logger.Printf("Request failed to start in %dμs with error: %v", time.Now().UnixMicro()-startTime, err)
 	}
 
 	return natsResultMsg, natsError, err
