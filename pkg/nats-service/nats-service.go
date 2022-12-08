@@ -1,28 +1,33 @@
 package nats_service
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/nats-io/nats.go"
+	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 )
 
 const MESSAGE_ID = "MESSAGE_ID"
 
 type NatService struct {
-	url          string
-	nc           *nats.Conn
-	subscription *nats.Subscription
-	endPoints    []*NatsEndpoint
-	basePath     string
-	queueName    string
+	url                   string
+	nc                    *nats.Conn
+	subscription          *nats.Subscription
+	chunkedSubscription   *nats.Subscription
+	chunkCache            *ttlcache.Cache[string, [][]byte]
+	endPoints             []*NatsEndpoint
+	basePath              string
+	queueName             string
+	maxRespSizeToCompress int
+	maxRespSizeToChunk    int
 }
 
 type NatsMessage struct {
@@ -51,10 +56,10 @@ func New(basePath string) (*NatService, error) {
 	natsKey := getEnvironmentVariableOrPanic("NATS_KEY")
 	natsQueueName := getEnvironmentVariableOrPanic("NATS_QUEUE_NAME")
 
-	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey)
+	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey, 1024*2, 1024*300)
 }
 
-func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string) (*NatService, error) {
+func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
@@ -67,10 +72,13 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string) (*
 	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
 
 	ns := NatService{
-		url:       natsUrl,
-		nc:        nc,
-		basePath:  basePath,
-		queueName: natsQueueName,
+		url:                   natsUrl,
+		nc:                    nc,
+		basePath:              basePath,
+		queueName:             natsQueueName,
+		maxRespSizeToCompress: maxRespSizeToCompress,
+		maxRespSizeToChunk:    maxRespSizeToChunk,
+		chunkCache:            ttlcache.New[string, [][]byte](),
 	}
 
 	return &ns, nil
@@ -115,7 +123,7 @@ func (ns *NatService) Start() error {
 	subscribe, err := ns.nc.QueueSubscribe(ns.basePath+".>", ns.queueName, func(msg *nats.Msg) {
 		for _, endPoint := range ns.endPoints {
 			if endPoint.regex.MatchString(msg.Subject) {
-				go handleEndpointCall(endPoint, msg)
+				go ns.handleEndpointCall(endPoint, msg)
 				return
 			}
 		}
@@ -129,15 +137,87 @@ func (ns *NatService) Start() error {
 
 	ns.subscription = subscribe
 
-	return nil
+	err = ns.startChunkResponder()
+
+	return err
 }
 
-func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
+func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 
 	startTime := time.Now().UnixMicro()
 
-	var messageId string
+	natsMessage := createNatsMessageFromRequest(msg)
 
+	err := endPoint.endPointFunc(&natsMessage)
+	endTime := time.Now().UnixMicro()
+	elapsedTime := endTime - startTime
+	responseMsg := nats.Msg{}
+
+	var status string
+	var responseMsgLog []byte
+
+	if err != nil {
+		status = fmt.Sprintf("%d", err.Status)
+		responseMsg.Header = nats.Header{}
+		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(MESSAGE_ID, natsMessage.MessageId)
+
+		jsonBA, jsonError := json.Marshal(err)
+		if jsonError != nil {
+			errorMsg := fmt.Sprintf("error creating json from response: %v", jsonError)
+			natsMessage.Logger.Print(errorMsg)
+			responseMsg.Data = []byte(errorMsg)
+		} else {
+			responseMsg.Data = jsonBA
+		}
+
+		if len(responseMsg.Data) <= 1024 {
+			responseMsgLog = responseMsg.Data
+		} else {
+			responseMsgLog = responseMsg.Data[:1024]
+		}
+	} else {
+		status = "200"
+		if natsMessage.ResponseHeader != nil {
+			responseMsg.Header = natsMessage.ResponseHeader
+		} else {
+			responseMsg.Header = nats.Header{}
+		}
+
+		//capture data for logging
+		if len(natsMessage.ResponseBody) <= 1024 {
+			responseMsgLog = natsMessage.ResponseBody
+		} else {
+			responseMsgLog = natsMessage.ResponseBody[:1024]
+		}
+
+		if len(natsMessage.ResponseBody) > ns.maxRespSizeToCompress {
+			natsMessage.Logger.Printf("response size %d is bigger than max size to compress %d, not compressing", len(natsMessage.ResponseBody), ns.maxRespSizeToCompress)
+			responseMsg.Header.Set(nats_service_common.COMPRESSED_HEADER, nats_service_common.GZIP_COMPRESSION_TYPE)
+			natsMessage.ResponseBody = nats_service_common.GZipBytes(natsMessage.ResponseBody)
+			natsMessage.Logger.Printf("response size after compression %d", len(natsMessage.ResponseBody))
+		}
+		responseMsg.Data = natsMessage.ResponseBody
+		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(MESSAGE_ID, natsMessage.MessageId)
+	}
+
+	var reqMsgLog []byte
+	if len(msg.Data) > 1024 {
+		reqMsgLog = msg.Data[:1024]
+	} else {
+		reqMsgLog = msg.Data
+	}
+
+	errResponding := ns.respondToRequest(msg, &responseMsg)
+	if errResponding != nil {
+		natsMessage.Logger.Printf("error returning response: %v", errResponding)
+	}
+	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, req:%s, resp: %s", status, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+}
+
+func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
+	var messageId string
 	if msg.Header != nil && msg.Header.Get(MESSAGE_ID) != "" {
 		messageId = msg.Header.Get(MESSAGE_ID)
 	} else {
@@ -149,81 +229,13 @@ func handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 		Header:    msg.Header,
 		Path:      msg.Subject,
 		MessageId: messageId,
-		Logger:    log.New(os.Stdout, messageId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix),
+		Logger:    createLogger(messageId),
 	}
-
-	err := endPoint.endPointFunc(&natsMessage)
-
-	endTime := time.Now().UnixMicro()
-
-	elapsedTime := endTime - startTime
-
-	responseMsg := nats.Msg{}
-
-	var status string
-	var responseMsgLog []byte
-
-	if err != nil {
-		status = fmt.Sprintf("%d", err.Status)
-		responseMsg.Header = nats.Header{}
-
-		responseMsg.Header.Set("status", status)
-		responseMsg.Header.Set(MESSAGE_ID, messageId)
-
-		jsonBA, jsonError := json.Marshal(err)
-
-		errorMsg := fmt.Sprintf("error creating json from response: %v", jsonError)
-
-		if jsonError != nil {
-			natsMessage.Logger.Print(errorMsg)
-			responseMsg.Data = []byte(errorMsg)
-		} else {
-			responseMsg.Data = jsonBA
-		}
-	} else {
-		status = "200"
-
-		if natsMessage.ResponseHeader != nil {
-			responseMsg.Header = natsMessage.ResponseHeader
-		} else {
-			responseMsg.Header = nats.Header{}
-		}
-
-		responseMsg.Data = natsMessage.ResponseBody
-		responseMsg.Header.Set("status", status)
-		responseMsg.Header.Set(MESSAGE_ID, messageId)
-	}
-
-	if len(responseMsg.Data) <= 1024 {
-		responseMsgLog = responseMsg.Data
-	} else {
-		responseMsgLog = responseMsg.Data[:1024]
-	}
-	var reqMsgLog []byte
-	if len(msg.Data) > 1024 {
-		reqMsgLog = msg.Data[:1024]
-	} else {
-		reqMsgLog = msg.Data
-	}
-
-	errResponding := msg.RespondMsg(&responseMsg)
-	if errResponding != nil {
-		natsMessage.Logger.Printf("error returning response: %v", errResponding)
-	}
-
-	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, req:%s, resp: %s", status, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+	return natsMessage
 }
 
-// compress byte array using gzip
-func compress(body []byte) []byte {
-	var b bytes.Buffer
-	w := gzip.NewWriter(&b)
-	_, err := w.Write(body)
-	if err != nil {
-		log.Println(err)
-	}
-	w.Close()
-	return b.Bytes()
+func createLogger(messageId string) *log.Logger {
+	return log.New(os.Stdout, messageId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix)
 }
 
 func handleEndpointNotFound(msg *nats.Msg) {
@@ -246,6 +258,26 @@ func handleEndpointNotFound(msg *nats.Msg) {
 
 func (ns *NatService) Shutdown() error {
 	return ns.subscription.Drain()
+}
+
+func (ns *NatService) respondToRequest(req *nats.Msg, responseMsg *nats.Msg) error {
+
+	//if it is small enough, then we send it back
+	if len(responseMsg.Data) < ns.maxRespSizeToChunk {
+		return req.RespondMsg(responseMsg)
+	}
+
+	//the data is too large, so we are going to chunk it
+	chunkedData := nats_service_common.ChunkByteArray(responseMsg.Data, ns.maxRespSizeToChunk)
+
+	responseMsg.Header.Set(nats_service_common.CHUNKED_SUBJECT, ns.chunkedSubscription.Subject)
+	responseMsg.Header.Set(nats_service_common.CHUNKED_LENGTH, strconv.Itoa(len(chunkedData)))
+
+	chunksId := uuid.New().String()
+	responseMsg.Header.Set(nats_service_common.CHUNKS_ID, chunksId)
+	ns.chunkCache.Set(chunksId, chunkedData, time.Minute*3)
+	responseMsg.Data = []byte("")
+	return req.RespondMsg(responseMsg)
 }
 
 func setupConnOptions(opts []nats.Option) []nats.Option {

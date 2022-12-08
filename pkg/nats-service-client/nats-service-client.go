@@ -1,13 +1,16 @@
 package nats_service_client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
+	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -100,11 +103,20 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 
 		if status == "200" {
 			//	success
-			natsResultMsg = &NatsResponseMessage{
-				Data:   msg.Data,
-				Header: convertNatsHeaderToHeader(msg.Header),
+
+			respData, decompressionError := cl.decompressIfCompressionUsed(msg, err, logger)
+			if decompressionError != nil {
+				err = fmt.Errorf("invalid response from service:%w", decompressionError)
+				logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, err)
+			} else {
+
+				natsResultMsg = &NatsResponseMessage{
+					Data:   respData,
+					Header: convertNatsHeaderToHeader(msg.Header),
+				}
+				logger.Printf("Request successfully completed in %dμs", time.Now().UnixMicro()-startTime)
 			}
-			logger.Printf("Request successfully completed in %dμs", time.Now().UnixMicro()-startTime)
+
 		} else {
 			//	error condition
 			natsError = &nats_service.NatsServiceError{}
@@ -119,6 +131,74 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	}
 
 	return natsResultMsg, natsError, err
+}
+
+func (cl *Client) decompressIfCompressionUsed(msg *nats.Msg, err error, logger *log.Logger) ([]byte, error) {
+	var respData []byte
+	var rawData []byte
+
+	//check if chunked
+	if msg.Header.Get(nats_service_common.CHUNKED_SUBJECT) != "" {
+		//data is chunked.
+		chunkSubject := msg.Header.Get(nats_service_common.CHUNKED_SUBJECT)
+		chunksId := msg.Header.Get(nats_service_common.CHUNKS_ID)
+		chunksCount := msg.Header.Get(nats_service_common.CHUNKED_LENGTH)
+		msgId := msg.Header.Get(MESSAGE_ID)
+		//ChunkLength
+		//ChunkId
+
+		rawData, err = cl.downloadChunks(chunkSubject, msgId, chunksId, chunksCount, logger)
+		if err != nil {
+			return nil, err
+		}
+
+	} else {
+		rawData = msg.Data
+	}
+
+	if msg.Header.Get(nats_service_common.COMPRESSED_HEADER) == nats_service_common.GZIP_COMPRESSION_TYPE {
+		respData, err = nats_service_common.GUnzipBytes(rawData)
+		if err != nil {
+			logger.Printf("Error decompressing response: %s", err)
+			return nil, err
+		}
+	} else {
+		respData = msg.Data
+	}
+	return respData, nil
+}
+
+func (cl *Client) downloadChunks(subject, messageId string, chunksId, count string, logger *log.Logger) ([]byte, error) {
+
+	chunksCount, err := strconv.Atoi(count)
+	if err != nil {
+		logger.Printf("Error parsing chunks count: %s", err)
+		return nil, err
+	}
+
+	buff := bytes.NewBuffer(nil)
+
+	for i := 0; i < chunksCount; i++ {
+
+		request := nats.Msg{
+			Subject: subject,
+			Header:  nats.Header{},
+		}
+
+		request.Header.Set(nats_service_common.CHUNKS_ID, chunksId)
+		request.Header.Set(nats_service_common.CHUNK_INDEX, strconv.Itoa(i))
+		request.Header.Set(nats_service.MESSAGE_ID, messageId)
+
+		msg, err := cl.nc.RequestMsg(&request, 30*time.Second)
+		if err != nil {
+			logger.Printf("Error downloading chunk: %s", err)
+			return nil, err
+		}
+		buff.Write(msg.Data)
+	}
+
+	return buff.Bytes(), nil
+
 }
 
 func convertNatsHeaderToHeader(header nats.Header) Header {

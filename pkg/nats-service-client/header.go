@@ -1,5 +1,7 @@
 package nats_service_client
 
+const _EMPTY_ = ""
+
 type Header map[string][]string
 
 // Add adds the key, value pair to the header. It is case-sensitive
@@ -14,8 +16,6 @@ func (h Header) Add(key, value string) {
 func (h Header) Set(key, value string) {
 	h[key] = []string{value}
 }
-
-const _EMPTY_ = ""
 
 // Get gets the first value associated with the given key.
 // It is case-sensitive.
