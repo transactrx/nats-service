@@ -41,6 +41,7 @@ func main() {
 
 	natservice.AddEndpoint("getTime/.*", getTime)
 	natservice.AddEndpoint("getTimeError", getTimeError)
+	natservice.AddEndpoint("getCompressedResponse", getCompressedResponse)
 
 	err = natservice.Start()
 	if err != nil {
@@ -65,4 +66,16 @@ func main() {
 	runtime.Goexit()
 
 	log.Printf("exiting...")
+}
+
+func getCompressedResponse(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+
+	//read file contents into byte array
+
+	byteArray, _ := os.ReadFile("/Users/manuelelaraj/tmp/disSSkdrill.dmg")
+
+	//respBody := []byte("this is a very large body that will be compressed this is a very large body that will be compressed this is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedasdasthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressedthis is a very large body that will be compressed")
+	msg.ResponseBody = byteArray
+	msg.Logger.Printf("completed function ")
+	return nil
 }

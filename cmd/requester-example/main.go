@@ -3,6 +3,7 @@ package main
 import (
 	nats_service_client "github.com/transactrx/nats-service/pkg/nats-service-client"
 	"log"
+	"os"
 	"time"
 )
 
@@ -13,11 +14,12 @@ func main() {
 		log.Panic(err)
 	}
 
-	exampleWithOutExceptions(client)
-
-	exampleWithExceptions(client)
-
-	exampleAPIProducesError(client)
+	//exampleWithOutExceptions(client)
+	//
+	//exampleWithExceptions(client)
+	//
+	//exampleAPIProducesError(client)
+	exampleLargeBodyTestCompression(client)
 }
 
 func exampleWithOutExceptions(client *nats_service_client.Client) {
@@ -77,5 +79,26 @@ func exampleAPIProducesError(client *nats_service_client.Client) {
 
 	//	NOTE: never gets here because we have an error
 	log.Printf("data: %s", rspMsg.Data)
+	log.Printf("header: %v", rspMsg.Header)
+}
+
+func exampleLargeBodyTestCompression(client *nats_service_client.Client) {
+
+	rspMsg, svcErr, err := client.DoRequest("", "rx.api.getCompressedResponse", nil, nil, time.Second*10)
+
+	//	error connecting to service
+	if err != nil {
+		log.Printf("unable to make call to service: %v", err)
+		return
+	}
+
+	//	service returned an error
+	if svcErr != nil {
+		log.Printf("service returned error: %v", svcErr)
+		return
+	}
+
+	//	all is good - we got a good response - do what you got to do...
+	os.WriteFile("/Users/manuelelaraj/tmp/downloaded.txt", rspMsg.Data, 0644)
 	log.Printf("header: %v", rspMsg.Header)
 }
