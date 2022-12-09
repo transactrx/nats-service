@@ -55,7 +55,6 @@ func exampleWithExceptions(client *nats_service_client.Client) {
 		log.Printf("service returned error: %v", svcErr)
 		return
 	}
-	asdasd
 	//	NOTE: never gets here because we have an error
 	log.Printf("data: %s", rspMsg.Data)
 	log.Printf("header: %v", rspMsg.Header)
