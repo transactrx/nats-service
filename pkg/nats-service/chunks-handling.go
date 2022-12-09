@@ -14,7 +14,7 @@ import (
 
 func (ns *NatService) startChunkResponder() error {
 
-	subject := ns.basePath + "._chunked_" + uuid.New().String()
+	subject := ns.basePath + "_chunked_" + uuid.New().String()
 	subscribe, err := ns.nc.Subscribe(subject, ns.handleChunkDataRequest)
 	if err != nil {
 		return err
