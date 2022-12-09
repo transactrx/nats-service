@@ -26,8 +26,18 @@ func (ns *NatService) startChunkResponder() error {
 
 func (ns *NatService) cleanCacheService() {
 	for true {
-		ns.chunkCache.DeleteExpired()
-		time.Sleep(45 * time.Second)
+		if ns.chunkCache.Len() > 0 {
+			log.Printf("cleanCacheService: cleaning cache")
+			log.Printf("cleanCacheService: cache size: %d", ns.chunkCache.Len())
+			ns.chunkCache.DeleteExpired()
+			log.Printf("cleanCacheService: cache cleaned")
+			log.Printf("cleanCacheService: cache size: %d", ns.chunkCache.Len())
+
+		} else {
+			log.Print("cleanCacheService: cache is empty")
+		}
+		time.Sleep(60 * time.Second)
+
 	}
 }
 
