@@ -19,6 +19,9 @@ func (ns *NatService) startChunkResponder() error {
 	if err != nil {
 		return err
 	}
+	if !subscribe.IsValid() {
+		return fmt.Errorf("invalid subscription, possibly due to permissions")
+	}
 	ns.chunkedSubscription = subscribe
 	go ns.cleanCacheService()
 	return nil
