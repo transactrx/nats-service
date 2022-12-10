@@ -14,7 +14,7 @@ import (
 
 func (ns *NatService) startChunkResponder() error {
 
-	subject := ns.basePath + "_chunked_" + uuid.New().String()
+	subject := ns.basePath + "_.chunked_" + uuid.New().String()
 	subscribe, err := ns.nc.Subscribe(subject, ns.handleChunkDataRequest)
 	if err != nil {
 		return err
@@ -38,6 +38,11 @@ func (ns *NatService) cleanCacheService() {
 
 		} else {
 			log.Print("cleanCacheService: cache is empty")
+		}
+		if !ns.chunkedSubscription.IsValid() {
+			log.Print("cleanCacheService: chunkedSubscription is not valid, exiting")
+		} else {
+			log.Print("cleanCacheService: chunkedSubscription is valid")
 		}
 		time.Sleep(60 * time.Second)
 

@@ -33,7 +33,7 @@ func getTimeError(msg *nats_service.NatsMessage) *nats_service.NatsServiceError 
 
 func main() {
 
-	natservice, err := nats_service.New("rx.api")
+	natservice, err := nats_service.New("trx.rxmedapi")
 
 	if err != nil {
 		log.Panicln(err)
@@ -60,6 +60,7 @@ func main() {
 			log.Printf("Error: Shutdown failed, %v", err)
 		} else {
 			log.Printf("Shutdown Succesfull, yea!")
+			os.Exit(0)
 		}
 	}()
 
