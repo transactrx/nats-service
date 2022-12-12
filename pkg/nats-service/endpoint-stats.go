@@ -7,6 +7,8 @@ type EndPointStats struct {
 	success atomic.Int64
 	// Number of requests that failed
 	failures atomic.Int64
+	//pct 95
+	pct95 atomic.Int64
 	// Average Latency
 	averageLatency int64
 	//endpoint subject
