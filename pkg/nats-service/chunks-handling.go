@@ -36,8 +36,6 @@ func (ns *NatService) cleanCacheService() {
 			log.Printf("cleanCacheService: cache cleaned")
 			log.Printf("cleanCacheService: cache size: %d", ns.chunkCache.Len())
 
-		} else {
-			log.Print("cleanCacheService: cache is empty")
 		}
 		if !ns.chunkedSubscription.IsValid() {
 			log.Print("cleanCacheService: chunkedSubscription is not valid, exiting")
