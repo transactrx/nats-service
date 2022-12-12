@@ -151,6 +151,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	err := endPoint.endPointFunc(&natsMessage)
 	endTime := time.Now().UnixMicro()
 	elapsedTime := endTime - startTime
+
 	responseMsg := nats.Msg{}
 
 	var status string
