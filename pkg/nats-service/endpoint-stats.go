@@ -22,4 +22,5 @@ func (s *EndPointStats) AddTransactionLatency(latency int64, success bool) {
 	} else {
 		s.failures.Add(1)
 	}
+	//	average latency
 }
