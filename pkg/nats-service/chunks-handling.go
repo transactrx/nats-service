@@ -186,7 +186,7 @@ func (ns *NatService) validateAndGetChunkRequestInfo(chunkReq *nats.Msg) (string
 		return "", -1, nil, errors.New("CHUNK_INDEX out of range")
 	}
 	//chunksId, chunkIndex, logger, err
-	msgId := chunkReq.Header.Get(MESSAGE_ID)
+	msgId := chunkReq.Header.Get(nats_service_common.MESSAGE_ID)
 	if msgId == "" {
 		msgId = uuid.New().String()
 	}

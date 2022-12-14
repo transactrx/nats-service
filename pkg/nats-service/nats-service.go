@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-const MESSAGE_ID = "MESSAGE_ID"
-
 type NatService struct {
 	url                   string
 	nc                    *nats.Conn
@@ -36,6 +34,7 @@ type NatsMessage struct {
 	Path           string
 	ResponseBody   []byte
 	MessageId      string
+	UserId         string
 	ResponseHeader nats.Header
 	Logger         *log.Logger
 }
@@ -161,7 +160,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		status = fmt.Sprintf("%d", err.Status)
 		responseMsg.Header = nats.Header{}
 		responseMsg.Header.Set("status", status)
-		responseMsg.Header.Set(MESSAGE_ID, natsMessage.MessageId)
+		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 
 		jsonBA, jsonError := json.Marshal(err)
 		if jsonError != nil {
@@ -193,14 +192,14 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		}
 
 		if len(natsMessage.ResponseBody) > ns.maxRespSizeToCompress {
-			natsMessage.Logger.Printf("response size %d is bigger than max size to compress %d, not compressing", len(natsMessage.ResponseBody), ns.maxRespSizeToCompress)
+			natsMessage.Logger.Printf("response size %d is bigger than max size to compress %d,  compressing", len(natsMessage.ResponseBody), ns.maxRespSizeToCompress)
 			responseMsg.Header.Set(nats_service_common.COMPRESSED_HEADER, nats_service_common.GZIP_COMPRESSION_TYPE)
 			natsMessage.ResponseBody = nats_service_common.GZipBytes(natsMessage.ResponseBody)
 			natsMessage.Logger.Printf("response size after compression %d", len(natsMessage.ResponseBody))
 		}
 		responseMsg.Data = natsMessage.ResponseBody
 		responseMsg.Header.Set("status", status)
-		responseMsg.Header.Set(MESSAGE_ID, natsMessage.MessageId)
+		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 	}
 
 	var reqMsgLog []byte
@@ -214,14 +213,18 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	if errResponding != nil {
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
-	natsMessage.Logger.Printf("apiStatus: %s, latency: %dμs, sub: %s, req:%s, resp: %s", status, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+
+	natsMessage.Logger.Printf("apiStatus: %s, user:%u latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
 }
 
 func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
 	var messageId string
-	if msg.Header != nil && msg.Header.Get(MESSAGE_ID) != "" {
-		messageId = msg.Header.Get(MESSAGE_ID)
+	var userId string
+	if msg.Header != nil && msg.Header.Get(nats_service_common.MESSAGE_ID) != "" {
+		messageId = msg.Header.Get(nats_service_common.MESSAGE_ID)
+		userId = msg.Header.Get(nats_service_common.USER_ID)
 	} else {
+		userId = ""
 		messageId = uuid.New().String()
 	}
 
@@ -230,6 +233,7 @@ func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
 		Header:    msg.Header,
 		Path:      msg.Subject,
 		MessageId: messageId,
+		UserId:    userId,
 		Logger:    createLogger(messageId),
 	}
 	return natsMessage

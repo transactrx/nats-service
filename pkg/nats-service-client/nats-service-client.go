@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-const MESSAGE_ID = "MESSAGE_ID"
-
 type Client struct {
 	nc *nats.Conn
 }
@@ -74,7 +72,8 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	log.Printf("corrolationId: %s", correlationId)
 
 	requestMsg.Header = nats.Header{}
-	requestMsg.Header.Set(MESSAGE_ID, correlationId)
+	requestMsg.Header.Set(nats_service_common.MESSAGE_ID, correlationId)
+	requestMsg.Header.Set(nats_service_common.USER_ID, cl.nc.Opts.User)
 
 	if header != nil && len(header) > 0 {
 		for key, values := range header {
@@ -143,11 +142,11 @@ func (cl *Client) decompressIfCompressionUsed(msg *nats.Msg, err error, logger *
 		chunkSubject := msg.Header.Get(nats_service_common.CHUNKED_SUBJECT)
 		chunksId := msg.Header.Get(nats_service_common.CHUNKS_ID)
 		chunksCount := msg.Header.Get(nats_service_common.CHUNKED_LENGTH)
-		msgId := msg.Header.Get(MESSAGE_ID)
+		msgId := msg.Header.Get(nats_service_common.MESSAGE_ID)
 		//ChunkLength
 		//ChunkId
 
-		rawData, err = cl.downloadChunks(chunkSubject, msgId, chunksId, chunksCount, logger)
+		rawData, err = cl.downloadChunks(chunkSubject, msgId, cl.nc.Opts.User, chunksId, chunksCount, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +167,7 @@ func (cl *Client) decompressIfCompressionUsed(msg *nats.Msg, err error, logger *
 	return respData, nil
 }
 
-func (cl *Client) downloadChunks(subject, messageId string, chunksId, count string, logger *log.Logger) ([]byte, error) {
+func (cl *Client) downloadChunks(subject, messageId, userId, chunksId, count string, logger *log.Logger) ([]byte, error) {
 
 	chunksCount, err := strconv.Atoi(count)
 	if err != nil {
@@ -187,7 +186,8 @@ func (cl *Client) downloadChunks(subject, messageId string, chunksId, count stri
 
 		request.Header.Set(nats_service_common.CHUNKS_ID, chunksId)
 		request.Header.Set(nats_service_common.CHUNK_INDEX, strconv.Itoa(i))
-		request.Header.Set(nats_service.MESSAGE_ID, messageId)
+		request.Header.Set(nats_service_common.MESSAGE_ID, messageId)
+		request.Header.Set(nats_service_common.USER_ID, userId)
 
 		msg, err := cl.nc.RequestMsg(&request, 30*time.Second)
 		if err != nil {

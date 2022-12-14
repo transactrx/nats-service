@@ -13,8 +13,10 @@ const CHUNKS_ID = "_Chunks_Id"
 const CHUNKED_LENGTH = "_Chunked_Length"
 const CHUNKED_SUBJECT = "_Chunked_Subject"
 const CHUNK_INDEX = "_Chunk_Index"
+const MESSAGE_ID = "_Message_Id"
+const USER_ID = "_User_Id"
 
-// function gzip byte array
+// GZipBytes function gzip byte array
 func GZipBytes(toBegzipped []byte) []byte {
 	var b bytes.Buffer
 
