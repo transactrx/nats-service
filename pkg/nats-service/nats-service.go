@@ -214,7 +214,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
 
-	natsMessage.Logger.Printf("apiStatus: %s, user:%u latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+	natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
 }
 
 func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
