@@ -9,6 +9,8 @@ import (
 const COMPRESSED_HEADER = "_Compression"
 const GZIP_COMPRESSION_TYPE = "gzip"
 
+const STATUS = "status"
+
 const CHUNKS_ID = "_Chunks_Id"
 const CHUNKED_LENGTH = "_Chunked_Length"
 const CHUNKED_SUBJECT = "_Chunked_Subject"

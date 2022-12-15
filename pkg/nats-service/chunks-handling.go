@@ -83,7 +83,7 @@ func validateChunkStringHeader(req *nats.Msg, headerName string, errStatus int) 
 			log.Printf("Unable to marshal error: %s", err)
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = req.RespondMsg(&respMsg)
 
 		return "", fmt.Errorf("missing header: %s", headerName)

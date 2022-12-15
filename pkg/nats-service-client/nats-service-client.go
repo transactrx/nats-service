@@ -97,7 +97,7 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	if err == nil {
 		var status string
 		if msg.Header != nil {
-			status = msg.Header.Get("status")
+			status = msg.Header.Get(nats_service_common.STATUS)
 		}
 
 		if status == "200" {
