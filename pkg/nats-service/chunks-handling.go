@@ -50,7 +50,7 @@ func (ns *NatService) cleanCacheService() {
 // chunk request handler
 func (ns *NatService) handleChunkDataRequest(chunkReq *nats.Msg) {
 
-	responseMsg := nats.Msg{}
+	responseMsg := nats.Msg{Header: nats.Header{}}
 	chunksId, chunkIndex, logger, err := ns.validateAndGetChunkRequestInfo(chunkReq)
 	if err != nil {
 		log.Printf("Unable to validate chunk request: %s", err)
@@ -60,6 +60,7 @@ func (ns *NatService) handleChunkDataRequest(chunkReq *nats.Msg) {
 	logger.Printf("handleChunkDataRequest: chunksId: %s, chunkIndex: %d", chunksId, chunkIndex)
 
 	responseMsg.Data = ns.chunkCache.Get(chunksId).Value()[chunkIndex]
+	responseMsg.Header.Set(nats_service_common.STATUS, "200")
 	err = chunkReq.RespondMsg(&responseMsg)
 	if err != nil {
 		logger.Printf("handleChunkDataRequest: error sending response: %s", err)
@@ -105,7 +106,7 @@ func validateChunkIntHeader(req *nats.Msg, headerName string, errStatus int) (in
 			log.Printf("Unable to marshal error: %s", err)
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = req.RespondMsg(&respMsg)
 
 		return -1, fmt.Errorf("missing header: %s", headerName)
@@ -123,7 +124,7 @@ func validateChunkIntHeader(req *nats.Msg, headerName string, errStatus int) (in
 			log.Printf("Unable to marshal error: %s", err)
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = req.RespondMsg(&respMsg)
 
 		return -1, fmt.Errorf("header: %s must be an integer", headerName)
@@ -139,7 +140,7 @@ func (ns *NatService) validateAndGetChunkRequestInfo(chunkReq *nats.Msg) (string
 			return "", -1, nil, err
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = chunkReq.RespondMsg(&respMsg)
 		if err != nil {
 			return "", -1, nil, err
@@ -163,7 +164,7 @@ func (ns *NatService) validateAndGetChunkRequestInfo(chunkReq *nats.Msg) (string
 			return "", -1, nil, err
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = chunkReq.RespondMsg(&respMsg)
 		if err != nil {
 			return "", -1, nil, err
@@ -178,7 +179,7 @@ func (ns *NatService) validateAndGetChunkRequestInfo(chunkReq *nats.Msg) (string
 			return "", -1, nil, err
 		}
 		respMsg := nats.Msg{Data: errorData, Header: nats.Header{}}
-		respMsg.Header.Set("status", "400")
+		respMsg.Header.Set(nats_service_common.STATUS, "400")
 		err = chunkReq.RespondMsg(&respMsg)
 		if err != nil {
 			return "", -1, nil, err
