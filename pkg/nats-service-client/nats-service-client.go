@@ -97,7 +97,7 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	if err == nil {
 		var status string
 		if msg.Header != nil {
-			status = msg.Header.Get("status")
+			status = msg.Header.Get(nats_service_common.STATUS)
 		}
 
 		if status == "200" {
@@ -194,7 +194,20 @@ func (cl *Client) downloadChunks(subject, messageId, userId, chunksId, count str
 			logger.Printf("Error downloading chunk: %s", err)
 			return nil, err
 		}
-		buff.Write(msg.Data)
+
+		if msg.Header.Get(nats_service_common.STATUS) == "200" {
+			buff.Write(msg.Data)
+		} else {
+			natsError := &nats_service.NatsServiceError{}
+			parsError := json.Unmarshal(msg.Data, natsError)
+			if parsError != nil {
+				err = fmt.Errorf("invalid response from service: %s, %w", msg.Data, parsError)
+				return nil, err
+			}
+
+			err = fmt.Errorf("unable to retrieve chunk, error: %v",  natsError)
+			return nil, err
+		}
 	}
 
 	return buff.Bytes(), nil
