@@ -198,9 +198,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			natsMessage.Logger.Printf("response size after compression %d", len(natsMessage.ResponseBody))
 		}
 		responseMsg.Data = natsMessage.ResponseBody
-		if len(responseMsg.Header.Get("status")) == 0 {
-			responseMsg.Header.Set("status", status)
-		}
+		responseMsg.Header.Set("status", status)
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 	}
 
