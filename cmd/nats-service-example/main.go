@@ -18,7 +18,6 @@ func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 
 	msg.Logger.Printf("received a message")
 	msg.ResponseBody = []byte(s)
-
 	msg.Logger.Printf("completed function ")
 
 	return nil
