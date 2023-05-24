@@ -16,7 +16,9 @@ import (
 )
 
 type Client struct {
-	nc *nats.Conn
+	nc                    *nats.Conn
+	maxSizeBeforeCompress int
+	maxSizeBeforeChunk    int
 }
 
 type NatsResponseMessage struct {
@@ -24,10 +26,23 @@ type NatsResponseMessage struct {
 	Header Header
 }
 
+var DefaultMaxSizeBeforeCompress int = 1024 * 2
+var DefaultMaxSizeBeforeChunk int = 1024 * 8
+
 func NewClient() (*Client, error) {
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
 	natsKey := os.Getenv("NATS_KEY")
+	MAX_SIZE_BEFORE_COMPRESS := os.Getenv("MAX_SIZE_BEFORE_COMPRESS")
+	MAX_SIZE_BEFORE_CHUNK := os.Getenv("MAX_SIZE_BEFORE_CHUNK")
+	maxSizeBeforeCompress := DefaultMaxSizeBeforeCompress
+	maxSizeBeforeChunk := DefaultMaxSizeBeforeChunk
+	if MAX_SIZE_BEFORE_COMPRESS != "" {
+		maxSizeBeforeCompress, _ = strconv.Atoi(MAX_SIZE_BEFORE_COMPRESS)
+	}
+	if MAX_SIZE_BEFORE_CHUNK != "" {
+		maxSizeBeforeChunk, _ = strconv.Atoi(MAX_SIZE_BEFORE_CHUNK)
+	}
 
 	if natsUrl == "" {
 		return nil, fmt.Errorf("environment variable NATS_URL is missing: %w", nats_service.ConfigError)
@@ -41,10 +56,16 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", nats_service.ConfigError)
 	}
 
-	return NewLowLevelClient(natsUrl, natsToken, natsKey)
+	return NewLowLevelClientWithChunkingAndCompression(natsUrl, maxSizeBeforeCompress, maxSizeBeforeChunk, natsToken, natsKey)
 }
 
-func NewLowLevelClient(natsUrl, natsToken, natsKey string) (*Client, error) {
+func NewLowLevelClient(natsUrl string, natsToken, natsKey string) (*Client, error) {
+
+	return NewLowLevelClientWithChunkingAndCompression(natsUrl, DefaultMaxSizeBeforeCompress, DefaultMaxSizeBeforeChunk, natsToken, natsKey)
+
+}
+
+func NewLowLevelClientWithChunkingAndCompression(natsUrl string, maxSizeBeforeCompress, maxSizeBeforeChunk int, natsToken, natsKey string) (*Client, error) {
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
@@ -57,7 +78,9 @@ func NewLowLevelClient(natsUrl, natsToken, natsKey string) (*Client, error) {
 	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
 
 	client := Client{
-		nc: nc,
+		nc:                    nc,
+		maxSizeBeforeChunk:    maxSizeBeforeChunk,
+		maxSizeBeforeCompress: maxSizeBeforeCompress,
 	}
 
 	return &client, nil
@@ -75,6 +98,11 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	requestMsg.Header.Set(nats_service_common.MESSAGE_ID, correlationId)
 	requestMsg.Header.Set(nats_service_common.USER_ID, cl.nc.Opts.User)
 
+	if len(data) > cl.maxSizeBeforeCompress {
+		data = nats_service_common.GZipBytes(data)
+		requestMsg.Header.Set(nats_service_common.COMPRESSED_HEADER, nats_service_common.GZIP_COMPRESSION_TYPE)
+	}
+
 	if header != nil && len(header) > 0 {
 		for key, values := range header {
 			for _, value := range values {
@@ -84,17 +112,20 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	}
 
 	logger := log.New(os.Stdout, correlationId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix)
+	startTime := time.Now().UnixMicro()
+	var reqErr error
+	var msg *nats.Msg
 
 	requestMsg.Subject = subject
 	requestMsg.Data = data
+	logger.Printf("Sending request to %s", subject)
+
+	msg, reqErr = cl.nc.RequestMsg(&requestMsg, timeout)
 
 	var natsError *nats_service.NatsServiceError
 	var natsResultMsg *NatsResponseMessage
 
-	logger.Printf("Sending request to %s", subject)
-	startTime := time.Now().UnixMicro()
-	msg, err := cl.nc.RequestMsg(&requestMsg, timeout)
-	if err == nil {
+	if reqErr == nil {
 		var status string
 		if msg.Header != nil {
 			status = msg.Header.Get(nats_service_common.STATUS)
@@ -103,10 +134,10 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 		if status == "200" {
 			//	success
 
-			respData, decompressionError := cl.decompressIfCompressionUsed(msg, err, logger)
+			respData, decompressionError := cl.decompressIfCompressionUsed(msg, reqErr, logger)
 			if decompressionError != nil {
-				err = fmt.Errorf("invalid response from service:%w", decompressionError)
-				logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, err)
+				reqErr = fmt.Errorf("invalid response from service:%w", decompressionError)
+				logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, reqErr)
 			} else {
 
 				natsResultMsg = &NatsResponseMessage{
@@ -121,15 +152,15 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 			natsError = &nats_service.NatsServiceError{}
 			parsError := json.Unmarshal(msg.Data, natsError)
 			if parsError != nil {
-				err = fmt.Errorf("invalid response from service: %s, %w", msg.Data, parsError)
+				reqErr = fmt.Errorf("invalid response from service: %s, %w", msg.Data, parsError)
 			}
 			logger.Printf("Request failed in %dμs with error: %v", time.Now().UnixMicro()-startTime, natsError)
 		}
 	} else {
-		logger.Printf("Request failed to start in %dμs with error: %v", time.Now().UnixMicro()-startTime, err)
+		logger.Printf("Request failed to start in %dμs with error: %v", time.Now().UnixMicro()-startTime, reqErr)
 	}
 
-	return natsResultMsg, natsError, err
+	return natsResultMsg, natsError, reqErr
 }
 
 func (cl *Client) decompressIfCompressionUsed(msg *nats.Msg, err error, logger *log.Logger) ([]byte, error) {
@@ -205,7 +236,7 @@ func (cl *Client) downloadChunks(subject, messageId, userId, chunksId, count str
 				return nil, err
 			}
 
-			err = fmt.Errorf("unable to retrieve chunk, error: %v",  natsError)
+			err = fmt.Errorf("unable to retrieve chunk, error: %v", natsError)
 			return nil, err
 		}
 	}
