@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dlclark/regexp2"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/nats-io/nats.go"
@@ -12,20 +13,22 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type NatService struct {
-	url                   string
-	nc                    *nats.Conn
-	subscription          *nats.Subscription
-	chunkedSubscription   *nats.Subscription
-	chunkCache            *ttlcache.Cache[string, [][]byte]
-	endPoints             []*NatsEndpoint
-	basePath              string
-	queueName             string
-	maxRespSizeToCompress int
-	maxRespSizeToChunk    int
+	url                         string
+	nc                          *nats.Conn
+	subscription                *nats.Subscription
+	chunkedSubscription         *nats.Subscription
+	chunkedReceiverSubscription *nats.Subscription
+	chunkCache                  *ttlcache.Cache[string, [][]byte]
+	endPoints                   []*NatsEndpoint
+	basePath                    string
+	queueName                   string
+	maxRespSizeToCompress       int
+	maxRespSizeToChunk          int
 }
 
 type NatsMessage struct {
@@ -37,12 +40,14 @@ type NatsMessage struct {
 	UserId         string
 	ResponseHeader nats.Header
 	Logger         *log.Logger
+	Parameters     map[string]string
 }
 
 type NatsEndpoint struct {
 	path         string
 	endPointFunc NatsEndpointFunc
-	regex        *regexp.Regexp
+	paramRegex   *regexp2.Regexp
+	matchRegex   *regexp2.Regexp
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -95,9 +100,12 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
 	}
 
-	fullPath := "^" + ns.basePath + "." + path + "$"
+	fullPath := ns.basePath + "." + path
+	matchFullPath := ns.basePath + "." + strings.Split(path, ".")[0]
 
-	reg, err := regexp.Compile(fullPath)
+	matchRegex, err := regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
+
+	paramReg, err := convertToRegex(fullPath)
 	if err != nil {
 		return fmt.Errorf("invalid regex expression: %w", err)
 	}
@@ -105,7 +113,8 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 	natsEndpoint := NatsEndpoint{
 		path:         path,
 		endPointFunc: endPoint,
-		regex:        reg,
+		paramRegex:   paramReg,
+		matchRegex:   matchRegex,
 	}
 
 	ns.endPoints = append(ns.endPoints, &natsEndpoint)
@@ -121,7 +130,17 @@ func (ns *NatService) Start() error {
 
 	subscribe, err := ns.nc.QueueSubscribe(ns.basePath+".>", ns.queueName, func(msg *nats.Msg) {
 		for _, endPoint := range ns.endPoints {
-			if endPoint.regex.MatchString(msg.Subject) {
+			if msg.Subject == ns.basePath {
+				break
+			}
+			matchSubject := ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), ".")[1]
+			match, matchErr := endPoint.matchRegex.MatchString(matchSubject)
+			if matchErr != nil {
+				log.Printf("error matching regex: %v", matchErr)
+				handleEndpointInternalException(msg, matchErr)
+				return
+			}
+			if match {
 				go ns.handleEndpointCall(endPoint, msg)
 				return
 			}
@@ -144,14 +163,32 @@ func (ns *NatService) Start() error {
 func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
 
 	startTime := time.Now().UnixMicro()
+	responseMsg := nats.Msg{}
+	natsMessage, requestErr := ns.createNatsMessageFromRequest(endPoint, msg)
+	if requestErr != nil {
+		natError := NewValidationError("error parsing request", 400, requestErr)
+		responseMsg.Header = nats.Header{}
+		responseMsg.Header.Set("status", "400")
+		jsonBA, jsonError := json.Marshal(natError)
 
-	natsMessage := createNatsMessageFromRequest(msg)
+		if jsonError != nil {
+			errorMsg := fmt.Sprintf("error creating json from response: %v", jsonError)
+			natsMessage.Logger.Print(errorMsg)
+			responseMsg.Data = []byte(errorMsg)
+		} else {
+			responseMsg.Data = jsonBA
+		}
+		err := ns.respondToRequest(msg, &responseMsg)
+		if err != nil {
+			log.Printf("error responding to request: %v", err)
+			return
+		}
+		return
+	}
 
-	err := endPoint.endPointFunc(&natsMessage)
+	err := endPoint.endPointFunc(natsMessage)
 	endTime := time.Now().UnixMicro()
 	elapsedTime := endTime - startTime
-
-	responseMsg := nats.Msg{}
 
 	var status string
 	var responseMsgLog []byte
@@ -217,9 +254,10 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
 }
 
-func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
+func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *nats.Msg) (*NatsMessage, error) {
 	var messageId string
 	var userId string
+
 	if msg.Header != nil && msg.Header.Get(nats_service_common.MESSAGE_ID) != "" {
 		messageId = msg.Header.Get(nats_service_common.MESSAGE_ID)
 		userId = msg.Header.Get(nats_service_common.USER_ID)
@@ -227,16 +265,29 @@ func createNatsMessageFromRequest(msg *nats.Msg) NatsMessage {
 		userId = ""
 		messageId = uuid.New().String()
 	}
+	if msg.Header != nil && msg.Header.Get(nats_service_common.COMPRESSED_HEADER) == nats_service_common.GZIP_COMPRESSION_TYPE {
+		bytes, err := nats_service_common.GUnzipBytes(msg.Data)
+		if err != nil {
+			log.Printf("error unzipping message: %v", err)
+			return nil, err
+		}
+		msg.Data = bytes
+	}
+	params, err := extractParams(endpoint.paramRegex, msg.Subject, ns.basePath+"."+endpoint.path)
+	if err != nil {
+		return nil, err
+	}
 
 	natsMessage := NatsMessage{
-		Body:      msg.Data,
-		Header:    msg.Header,
-		Path:      msg.Subject,
-		MessageId: messageId,
-		UserId:    userId,
-		Logger:    createLogger(messageId),
+		Body:       msg.Data,
+		Header:     msg.Header,
+		Path:       msg.Subject,
+		MessageId:  messageId,
+		UserId:     userId,
+		Parameters: params,
+		Logger:     createLogger(messageId),
 	}
-	return natsMessage
+	return &natsMessage, nil
 }
 
 func createLogger(messageId string) *log.Logger {
@@ -249,6 +300,23 @@ func handleEndpointNotFound(msg *nats.Msg) {
 
 	responseMsg.Header.Set("status", "404")
 	notFoundError := NewEndpointNotFoundError(msg.Subject)
+
+	errorText, err := json.Marshal(notFoundError)
+
+	if err != nil {
+		errorText = []byte("unable to marshall EndpointNotFoundError")
+		log.Printf("%s", errorText)
+	}
+
+	responseMsg.Data = errorText
+	msg.RespondMsg(&responseMsg)
+}
+func handleEndpointInternalException(msg *nats.Msg, err error) {
+	responseMsg := nats.Msg{}
+	responseMsg.Header = nats.Header{}
+
+	responseMsg.Header.Set("status", "500")
+	notFoundError := NewServerError("Error while parsing request path", 500, err)
 
 	errorText, err := json.Marshal(notFoundError)
 
@@ -310,4 +378,69 @@ func getEnvironmentVariableOrPanic(key string) string {
 		log.Panicf("Environment variable %s is missing", key)
 	}
 	return value
+}
+
+func convertToRegex(input string) (*regexp2.Regexp, error) {
+	// Escape the '.'
+	input = strings.Replace(input, ".", "\\.", -1)
+
+	regex := regexp.MustCompile(`:(\w+)`)
+	result := regex.ReplaceAllStringFunc(input, func(s string) string {
+		// Remove the leading ':' and wrap the name with the regex pattern
+		return fmt.Sprintf(`(?P<%s>[^.]+)`, strings.TrimPrefix(s, ":"))
+	})
+
+	// Add start and end identifiers to match the entire string
+	result = "^" + result + "$"
+
+	// Compile the regex string
+	compiledRegex, err := regexp2.Compile(result, regexp2.RE2)
+	if err != nil {
+		return nil, err
+	}
+
+	return compiledRegex, nil
+}
+
+func extractParams(regex *regexp2.Regexp, subject, endPoint string) (map[string]string, error) {
+	match, err := regex.FindStringMatch(subject)
+	if err != nil {
+		return nil, err
+	}
+
+	if match == nil {
+		return nil, fmt.Errorf("Error parsing parameters.  endPoint expects %s", formatRequiredParams(regex, endPoint))
+	}
+
+	params := make(map[string]string)
+	for _, name := range regex.GetGroupNames()[1:] {
+		group := match.GroupByName(name)
+		if group != nil {
+			params[name] = group.String()
+		}
+	}
+
+	return params, nil
+}
+
+func formatRequiredParams(regex *regexp2.Regexp, endPoint string) string {
+
+	// Get the names of the groups
+	groupNames := regex.GetGroupNames()
+
+	// Create a slice to hold the parameter position messages
+	var messages []string
+	for i, name := range groupNames {
+		if i != 0 { // Skip the 0 group, which is the entire match
+			messages = append(messages, fmt.Sprintf("Parameter '%s' at position %d", name, i))
+		}
+	}
+
+	// Join the messages into a single string
+	example := "endPoint uri: " + endPoint
+
+	message := strings.Join(messages, ". ")
+	message = message + ". " + example
+
+	return message
 }
