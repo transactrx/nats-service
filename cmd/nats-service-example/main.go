@@ -14,9 +14,10 @@ import (
 
 func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 
-	paramOne := msg.Parameters["paramterOne"]
+	paramOne := msg.Parameters["parameterOne"]
+	paramTwo := msg.Parameters["parameterTwo"]
 
-	log.Printf("paramterOne: %s", paramOne)
+	log.Printf("paramterOne: %s parameterTwo: %s", paramOne, paramTwo)
 
 	s := fmt.Sprintf("The time is %s", time.Now())
 
@@ -42,7 +43,7 @@ func main() {
 		log.Panicln(err)
 	}
 
-	err = natservice.AddEndpoint("getTime.:paramterOne", getTime)
+	err = natservice.AddEndpoint("getTime/:parameterOne/:parameterTwo", getTime)
 	if err != nil {
 		log.Panicln(err)
 	}

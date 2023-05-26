@@ -44,10 +44,11 @@ type NatsMessage struct {
 }
 
 type NatsEndpoint struct {
-	path         string
-	endPointFunc NatsEndpointFunc
-	paramRegex   *regexp2.Regexp
-	matchRegex   *regexp2.Regexp
+	path          string
+	endPointFunc  NatsEndpointFunc
+	paramRegex    *regexp2.Regexp
+	matchRegex    *regexp2.Regexp
+	pathSeparator string
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -90,6 +91,11 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, ma
 
 func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error {
 
+	pathSeparator := "."
+	if strings.Contains(path, "/") {
+		pathSeparator = "/"
+	}
+
 	for _, endPoint := range ns.endPoints {
 		if endPoint.path == path {
 			return fmt.Errorf("endpoint already in use: %w", ConfigError)
@@ -101,20 +107,21 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 	}
 
 	fullPath := ns.basePath + "." + path
-	matchFullPath := ns.basePath + "." + strings.Split(path, ".")[0]
+	matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
 
 	matchRegex, err := regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
 
-	paramReg, err := convertToRegex(fullPath)
+	paramReg, err := convertToRegex(fullPath, pathSeparator)
 	if err != nil {
 		return fmt.Errorf("invalid regex expression: %w", err)
 	}
 
 	natsEndpoint := NatsEndpoint{
-		path:         path,
-		endPointFunc: endPoint,
-		paramRegex:   paramReg,
-		matchRegex:   matchRegex,
+		path:          path,
+		endPointFunc:  endPoint,
+		paramRegex:    paramReg,
+		matchRegex:    matchRegex,
+		pathSeparator: pathSeparator,
 	}
 
 	ns.endPoints = append(ns.endPoints, &natsEndpoint)
@@ -133,7 +140,13 @@ func (ns *NatService) Start() error {
 			if msg.Subject == ns.basePath {
 				break
 			}
-			matchSubject := ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), ".")[1]
+			matchSubject := ""
+			if endPoint.pathSeparator == "/" {
+				matchSubject = strings.Split(msg.Subject, endPoint.pathSeparator)[0]
+			} else {
+				matchSubject = ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), endPoint.pathSeparator)[1]
+			}
+
 			match, matchErr := endPoint.matchRegex.MatchString(matchSubject)
 			if matchErr != nil {
 				log.Printf("error matching regex: %v", matchErr)
@@ -380,14 +393,15 @@ func getEnvironmentVariableOrPanic(key string) string {
 	return value
 }
 
-func convertToRegex(input string) (*regexp2.Regexp, error) {
-	// Escape the '.'
-	input = strings.Replace(input, ".", "\\.", -1)
+func convertToRegex(input string, separator string) (*regexp2.Regexp, error) {
+	// Escape the separator
+	escapedSeparator := "\\" + separator
+	input = strings.ReplaceAll(input, separator, escapedSeparator)
 
 	regex := regexp.MustCompile(`:(\w+)`)
 	result := regex.ReplaceAllStringFunc(input, func(s string) string {
 		// Remove the leading ':' and wrap the name with the regex pattern
-		return fmt.Sprintf(`(?P<%s>[^.]+)`, strings.TrimPrefix(s, ":"))
+		return fmt.Sprintf(`(?P<%s>[^%s]+)`, strings.TrimPrefix(s, ":"), escapedSeparator)
 	})
 
 	// Add start and end identifiers to match the entire string

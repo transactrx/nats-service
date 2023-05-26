@@ -16,10 +16,10 @@ func main() {
 
 	exampleWithOutExceptions(client)
 	//
-	//exampleWithExceptions(client)
+	exampleWithExceptions(client)
 	////
-	//exampleAPIProducesError(client)
-	//exampleLargeBodyTestCompression(client)
+	exampleAPIProducesError(client)
+	exampleLargeBodyTestCompression(client)
 }
 
 func exampleWithOutExceptions(client *nats_service_client.Client) {
