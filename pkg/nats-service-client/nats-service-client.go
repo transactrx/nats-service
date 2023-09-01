@@ -197,7 +197,9 @@ func (cl *Client) decompressIfCompressionUsed(msg *nats.Msg, err error, logger *
 	}
 	return respData, nil
 }
-
+func (cl *Client) GetNatsClient() *nats.Conn {
+	return cl.nc
+}
 func (cl *Client) downloadChunks(subject, messageId, userId, chunksId, count string, logger *log.Logger) ([]byte, error) {
 
 	chunksCount, err := strconv.Atoi(count)
