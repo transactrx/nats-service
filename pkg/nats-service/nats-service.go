@@ -32,15 +32,16 @@ type NatService struct {
 }
 
 type NatsMessage struct {
-	Body           []byte
-	Header         nats.Header
-	Path           string
-	ResponseBody   []byte
-	MessageId      string
-	UserId         string
-	ResponseHeader nats.Header
-	Logger         *log.Logger
-	Parameters     map[string]string
+	Body            []byte
+	Header          nats.Header
+	Path            string
+	ResponseBody    []byte
+	MessageId       string
+	UserId          string
+	ResponseHeader  nats.Header
+	Logger          *log.Logger
+	Parameters      map[string]string
+	OriginalMessage *nats.Msg
 }
 
 type NatsEndpoint struct {
@@ -292,13 +293,14 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 	}
 
 	natsMessage := NatsMessage{
-		Body:       msg.Data,
-		Header:     msg.Header,
-		Path:       msg.Subject,
-		MessageId:  messageId,
-		UserId:     userId,
-		Parameters: params,
-		Logger:     createLogger(messageId),
+		Body:            msg.Data,
+		Header:          msg.Header,
+		Path:            msg.Subject,
+		MessageId:       messageId,
+		UserId:          userId,
+		Parameters:      params,
+		Logger:          createLogger(messageId),
+		OriginalMessage: msg,
 	}
 	return &natsMessage, nil
 }
