@@ -208,6 +208,12 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	var responseMsgLog []byte
 
 	if err != nil {
+
+		//is it forwarded
+		if err.Status == 302 {
+			return
+		}
+
 		status = fmt.Sprintf("%d", err.Status)
 		responseMsg.Header = nats.Header{}
 		responseMsg.Header.Set("status", status)
