@@ -43,3 +43,11 @@ func NewEndpointNotFoundError(subject string) NatsServiceError {
 		ApiStatusCode: 404,
 	}
 }
+
+func NewForwardedError(subject string) NatsServiceError {
+	return NatsServiceError{
+		Status:        302,
+		ErrorMessage:  fmt.Sprintf("subject: %s not found", subject),
+		ApiStatusCode: 404,
+	}
+}
