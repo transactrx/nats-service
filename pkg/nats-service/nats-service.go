@@ -29,6 +29,7 @@ type NatService struct {
 	queueName                   string
 	maxRespSizeToCompress       int
 	maxRespSizeToChunk          int
+	debug                       bool
 }
 
 type NatsMessage struct {
@@ -61,11 +62,20 @@ func New(basePath string) (*NatService, error) {
 	natsToken := getEnvironmentVariableOrPanic("NATS_JWT")
 	natsKey := getEnvironmentVariableOrPanic("NATS_KEY")
 	natsQueueName := getEnvironmentVariableOrPanic("NATS_QUEUE_NAME")
+	natsDebug := os.Getenv("NATS_DEBUG")
 
-	return NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey, 1024*2, 1024*300)
+	debugEnabled, _ := strconv.ParseBool(natsDebug)
+
+	return NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey, 1024*2, 1024*300, debugEnabled)
+}
+func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
+	natsDebug := os.Getenv("NATS_DEBUG")
+
+	debug, _ := strconv.ParseBool(natsDebug)
+	return NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey, maxRespSizeToCompress, maxRespSizeToChunk, debug)
 }
 
-func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
+func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int, debug bool) (*NatService, error) {
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
@@ -85,6 +95,7 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, ma
 		maxRespSizeToCompress: maxRespSizeToCompress,
 		maxRespSizeToChunk:    maxRespSizeToChunk,
 		chunkCache:            ttlcache.New[string, [][]byte](),
+		debug:                 debug,
 	}
 
 	return &ns, nil
@@ -249,10 +260,14 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		}
 
 		if len(natsMessage.ResponseBody) > ns.maxRespSizeToCompress {
-			natsMessage.Logger.Printf("response size %d is bigger than max size to compress %d,  compressing", len(natsMessage.ResponseBody), ns.maxRespSizeToCompress)
+			if ns.debug {
+				natsMessage.Logger.Printf("response size %d is bigger than max size to compress %d,  compressing", len(natsMessage.ResponseBody), ns.maxRespSizeToCompress)
+			}
 			responseMsg.Header.Set(nats_service_common.COMPRESSED_HEADER, nats_service_common.GZIP_COMPRESSION_TYPE)
 			natsMessage.ResponseBody = nats_service_common.GZipBytes(natsMessage.ResponseBody)
-			natsMessage.Logger.Printf("response size after compression %d", len(natsMessage.ResponseBody))
+			if ns.debug {
+				natsMessage.Logger.Printf("response size after compression %d", len(natsMessage.ResponseBody))
+			}
 		}
 		responseMsg.Data = natsMessage.ResponseBody
 		responseMsg.Header.Set("status", status)
@@ -271,7 +286,9 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
 
-	natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+	if ns.debug {
+		natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
+	}
 }
 
 func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *nats.Msg) (*NatsMessage, error) {

@@ -19,6 +19,7 @@ type Client struct {
 	nc                    *nats.Conn
 	maxSizeBeforeCompress int
 	maxSizeBeforeChunk    int
+	debug                 bool
 }
 
 type NatsResponseMessage struct {
@@ -33,6 +34,7 @@ func NewClient() (*Client, error) {
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
 	natsKey := os.Getenv("NATS_KEY")
+	natsDebug := os.Getenv("NATS_DEBUG")
 	MAX_SIZE_BEFORE_COMPRESS := os.Getenv("MAX_SIZE_BEFORE_COMPRESS")
 	MAX_SIZE_BEFORE_CHUNK := os.Getenv("MAX_SIZE_BEFORE_CHUNK")
 	maxSizeBeforeCompress := DefaultMaxSizeBeforeCompress
@@ -56,7 +58,9 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", nats_service.ConfigError)
 	}
 
-	return NewLowLevelClientWithChunkingAndCompression(natsUrl, maxSizeBeforeCompress, maxSizeBeforeChunk, natsToken, natsKey)
+	debug, _ := strconv.ParseBool(natsDebug)
+
+	return NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl, maxSizeBeforeCompress, maxSizeBeforeChunk, natsToken, natsKey, debug)
 }
 
 func NewLowLevelClient(natsUrl string, natsToken, natsKey string) (*Client, error) {
@@ -66,6 +70,15 @@ func NewLowLevelClient(natsUrl string, natsToken, natsKey string) (*Client, erro
 }
 
 func NewLowLevelClientWithChunkingAndCompression(natsUrl string, maxSizeBeforeCompress, maxSizeBeforeChunk int, natsToken, natsKey string) (*Client, error) {
+
+	natsDebug := os.Getenv("NATS_DEBUG")
+	debug, _ := strconv.ParseBool(natsDebug)
+
+	return NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl, maxSizeBeforeCompress, maxSizeBeforeChunk, natsToken, natsKey, debug)
+
+}
+
+func NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl string, maxSizeBeforeCompress, maxSizeBeforeChunk int, natsToken, natsKey string, debug bool) (*Client, error) {
 
 	var opts []nats.Option
 	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
@@ -81,6 +94,7 @@ func NewLowLevelClientWithChunkingAndCompression(natsUrl string, maxSizeBeforeCo
 		nc:                    nc,
 		maxSizeBeforeChunk:    maxSizeBeforeChunk,
 		maxSizeBeforeCompress: maxSizeBeforeCompress,
+		debug:                 debug,
 	}
 
 	return &client, nil
@@ -92,7 +106,9 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 	if strings.Trim(correlationId, " ") == "" {
 		correlationId = uuid.New().String()
 	}
-	log.Printf("corrolationId: %s", correlationId)
+	if cl.debug {
+		log.Printf("corrolationId: %s", correlationId)
+	}
 
 	requestMsg.Header = nats.Header{}
 	requestMsg.Header.Set(nats_service_common.MESSAGE_ID, correlationId)
@@ -118,7 +134,9 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 
 	requestMsg.Subject = subject
 	requestMsg.Data = data
-	logger.Printf("Sending request to %s", subject)
+	if cl.debug {
+		logger.Printf("Sending request to %s", subject)
+	}
 
 	msg, reqErr = cl.nc.RequestMsg(&requestMsg, timeout)
 
@@ -144,7 +162,9 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 					Data:   respData,
 					Header: convertNatsHeaderToHeader(msg.Header),
 				}
-				logger.Printf("Request successfully completed in %dμs", time.Now().UnixMicro()-startTime)
+				if cl.debug {
+					logger.Printf("Request successfully completed in %dμs", time.Now().UnixMicro()-startTime)
+				}
 			}
 
 		} else {
