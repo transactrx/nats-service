@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/nats-io/nats.go"
-	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
-	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
+	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
+	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 )
 
 type Client struct {
@@ -50,13 +51,14 @@ func NewClient() (*Client, error) {
 		return nil, fmt.Errorf("environment variable NATS_URL is missing: %w", nats_service.ConfigError)
 	}
 
-	if natsToken == "" {
-		return nil, fmt.Errorf("environment variable NATS_JWT is missing: %w", nats_service.ConfigError)
-	}
+	// These are only required when using authentication.
+	// if natsToken == "" {
+	// 	return nil, fmt.Errorf("environment variable NATS_JWT is missing: %w", nats_service.ConfigError)
+	// }
 
-	if natsKey == "" {
-		return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", nats_service.ConfigError)
-	}
+	// if natsKey == "" {
+	// 	return nil, fmt.Errorf("environment variable NATS_KEY is missing: %w", nats_service.ConfigError)
+	// }
 
 	debug, _ := strconv.ParseBool(natsDebug)
 
@@ -79,9 +81,11 @@ func NewLowLevelClientWithChunkingAndCompression(natsUrl string, maxSizeBeforeCo
 }
 
 func NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl string, maxSizeBeforeCompress, maxSizeBeforeChunk int, natsToken, natsKey string, debug bool) (*Client, error) {
-
 	var opts []nats.Option
-	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
+	if (natsToken != "" && natsKey != "") {
+		// Set up with authentication
+		opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
+	}
 	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
