@@ -4,17 +4,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dlclark/regexp2"
-	"github.com/google/uuid"
-	"github.com/jellydator/ttlcache/v3"
-	"github.com/nats-io/nats.go"
-	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dlclark/regexp2"
+	"github.com/google/uuid"
+	"github.com/jellydator/ttlcache/v3"
+	"github.com/nats-io/nats.go"
+	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 )
 
 type NatService struct {
@@ -59,10 +60,10 @@ var ConfigError = errors.New("configuration error")
 
 func New(basePath string) (*NatService, error) {
 	natsUrl := getEnvironmentVariableOrPanic("NATS_URL")
-	natsToken := getEnvironmentVariableOrPanic("NATS_JWT")
-	natsKey := getEnvironmentVariableOrPanic("NATS_KEY")
 	natsQueueName := getEnvironmentVariableOrPanic("NATS_QUEUE_NAME")
 	natsDebug := os.Getenv("NATS_DEBUG")
+	natsToken := os.Getenv("NATS_JWT")
+	natsKey := os.Getenv("NATS_KEY")
 
 	debugEnabled, _ := strconv.ParseBool(natsDebug)
 
@@ -78,7 +79,10 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, ma
 func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int, debug bool) (*NatService, error) {
 
 	var opts []nats.Option
-	opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
+	if (natsToken != "" && natsKey != "") {
+		//Add authorization when configured
+		opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
+	}	
 	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
