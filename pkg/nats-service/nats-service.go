@@ -69,6 +69,11 @@ func New(basePath string) (*NatService, error) {
 
 	return NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey, 1024*2, 1024*300, debugEnabled)
 }
+
+func (ns *NatService) GetNatsService() *nats.Conn {
+	return ns.nc
+}
+
 func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
 	natsDebug := os.Getenv("NATS_DEBUG")
 
@@ -79,10 +84,10 @@ func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, ma
 func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int, debug bool) (*NatService, error) {
 
 	var opts []nats.Option
-	if (natsToken != "" && natsKey != "") {
+	if natsToken != "" && natsKey != "" {
 		//Add authorization when configured
 		opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
-	}	
+	}
 	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
