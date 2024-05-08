@@ -82,7 +82,7 @@ func NewLowLevelClientWithChunkingAndCompression(natsUrl string, maxSizeBeforeCo
 
 func NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl string, maxSizeBeforeCompress, maxSizeBeforeChunk int, natsToken, natsKey string, debug bool) (*Client, error) {
 	var opts []nats.Option
-	if (natsToken != "" && natsKey != "") {
+	if natsToken != "" && natsKey != "" {
 		// Set up with authentication
 		opts = []nats.Option{nats.UserJWTAndSeed(natsToken, natsKey)}
 	}
@@ -290,6 +290,13 @@ func convertNatsHeaderToHeader(header nats.Header) Header {
 func setupConnOptions(opts []nats.Option) []nats.Option {
 	totalWait := 15 * time.Minute
 	reconnectDelay := time.Second
+	appId := os.Getenv("APPID")
+	if appId == "" {
+		appId = "unknown"
+	}
+
+	opts = append(opts, nats.Name(appId))
+
 	opts = append(opts, nats.ReconnectWait(reconnectDelay))
 	opts = append(opts, nats.MaxReconnects(int(totalWait/reconnectDelay)))
 	opts = append(opts, nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
