@@ -403,6 +403,12 @@ func (ns *NatService) respondToRequest(req *nats.Msg, responseMsg *nats.Msg) err
 func setupConnOptions(opts []nats.Option) []nats.Option {
 	totalWait := 15 * time.Minute
 	reconnectDelay := time.Second
+	appId := os.Getenv("APPID")
+	if appId == "" {
+		appId = "unknown"
+	}
+
+	opts = append(opts, nats.Name(appId))
 	opts = append(opts, nats.ReconnectWait(reconnectDelay))
 	opts = append(opts, nats.MaxReconnects(int(totalWait/reconnectDelay)))
 	opts = append(opts, nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
