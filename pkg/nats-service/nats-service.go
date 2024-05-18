@@ -405,7 +405,7 @@ func setupConnOptions(opts []nats.Option) []nats.Option {
 	reconnectDelay := time.Second
 	appId := os.Getenv("APPID")
 	if appId == "" {
-		appId = "unknown"
+		appId = "unknownGoServiceConnection"
 	}
 
 	opts = append(opts, nats.Name(appId))
