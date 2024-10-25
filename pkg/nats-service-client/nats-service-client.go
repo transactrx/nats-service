@@ -31,7 +31,7 @@ type NatsResponseMessage struct {
 var DefaultMaxSizeBeforeCompress int = 1024 * 2
 var DefaultMaxSizeBeforeChunk int = 1024 * 8
 
-func NewClientWithEnv(natsUrl, natsToken, natsKey, natsDebug, MAX_SIZE_BEFORE_COMPRESS, MAX_SIZE_BEFORE_CHUNK string) (*Client, error) {
+func NewClientWithParams(natsUrl, natsToken, natsKey, natsDebug, MAX_SIZE_BEFORE_COMPRESS, MAX_SIZE_BEFORE_CHUNK string) (*Client, error) {
 	maxSizeBeforeCompress := DefaultMaxSizeBeforeCompress
 	maxSizeBeforeChunk := DefaultMaxSizeBeforeChunk
 	if MAX_SIZE_BEFORE_COMPRESS != "" {
