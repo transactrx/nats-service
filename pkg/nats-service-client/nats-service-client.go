@@ -31,6 +31,25 @@ type NatsResponseMessage struct {
 var DefaultMaxSizeBeforeCompress int = 1024 * 2
 var DefaultMaxSizeBeforeChunk int = 1024 * 8
 
+func NewClientWithEnv(natsUrl, natsToken, natsKey, natsDebug, MAX_SIZE_BEFORE_COMPRESS, MAX_SIZE_BEFORE_CHUNK string) (*Client, error) {
+	maxSizeBeforeCompress := DefaultMaxSizeBeforeCompress
+	maxSizeBeforeChunk := DefaultMaxSizeBeforeChunk
+	if MAX_SIZE_BEFORE_COMPRESS != "" {
+		maxSizeBeforeCompress, _ = strconv.Atoi(MAX_SIZE_BEFORE_COMPRESS)
+	}
+	if MAX_SIZE_BEFORE_CHUNK != "" {
+		maxSizeBeforeChunk, _ = strconv.Atoi(MAX_SIZE_BEFORE_CHUNK)
+	}
+
+	if natsUrl == "" {
+		return nil, fmt.Errorf("environment variable NATS_URL is missing: %w", nats_service.ConfigError)
+	}
+
+	debug, _ := strconv.ParseBool(natsDebug)
+
+	return NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl, maxSizeBeforeCompress, maxSizeBeforeChunk, natsToken, natsKey, debug)
+}
+
 func NewClient() (*Client, error) {
 	natsUrl := os.Getenv("NATS_URL")
 	natsToken := os.Getenv("NATS_JWT")
