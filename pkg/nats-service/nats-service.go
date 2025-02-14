@@ -47,11 +47,12 @@ type NatsMessage struct {
 }
 
 type NatsEndpoint struct {
-	path          string
-	endPointFunc  NatsEndpointFunc
-	paramRegex    *regexp2.Regexp
-	matchRegex    *regexp2.Regexp
-	pathSeparator string
+	path             string
+	endPointFunc     NatsEndpointFunc
+	paramRegex       *regexp2.Regexp
+	matchRegex       *regexp2.Regexp
+	pathSeparator    string
+	pathHasWildcards bool
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -132,25 +133,51 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		}
 	}
 
-	fullPath := ns.basePath + "." + path
-	matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
-
-	matchRegex, err := regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
-	if err != nil {
-		return fmt.Errorf("invalid regex expression: %w", err)
-	}
-
-	paramReg, err := convertToRegex(fullPath, pathSeparator)
-	if err != nil {
-		return fmt.Errorf("invalid regex expression: %w", err)
-	}
-
 	natsEndpoint := NatsEndpoint{
 		path:          path,
 		endPointFunc:  endPoint,
-		paramRegex:    paramReg,
-		matchRegex:    matchRegex,
 		pathSeparator: pathSeparator,
+	}
+
+	hasWildcardSuffix := strings.HasSuffix(path, ">")
+	if hasWildcardSuffix || strings.ContainsAny(path, "*") {
+		// Escape periods since they are special in regex
+		matchPath := strings.ReplaceAll(path, ".", `\.`)
+		// * in NATS means match anything between 2 periods
+		matchPath = strings.ReplaceAll(matchPath, "*", "[^.]+")
+		if hasWildcardSuffix {
+			// > suffix in NATS means replace anything after preceding period
+			// We simply remove the suffix - the expression will match anything until end of string
+			matchPath = "^" + ns.basePath + "." + strings.TrimSuffix(matchPath, ">")
+		} else {
+			// Adding $ suffix ensures match on the exact same number of previously escaped subject tokens
+			matchPath = "^" + ns.basePath + "." + matchPath + "$"
+		}
+
+		var err error
+		natsEndpoint.matchRegex, err = regexp2.Compile(matchPath, regexp2.RE2)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
+
+		natsEndpoint.pathHasWildcards = true
+		natsEndpoint.paramRegex = nil
+	} else {
+		fullPath := ns.basePath + "." + path
+		matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
+
+		var err error
+		natsEndpoint.matchRegex, err = regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
+
+		natsEndpoint.pathHasWildcards = false
+
+		natsEndpoint.paramRegex, err = convertToRegex(fullPath, pathSeparator)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
 	}
 
 	ns.endPoints = append(ns.endPoints, &natsEndpoint)
@@ -169,11 +196,16 @@ func (ns *NatService) Start() error {
 			if msg.Subject == ns.basePath {
 				break
 			}
-			matchSubject := ""
-			if endPoint.pathSeparator == "/" {
-				matchSubject = strings.Split(msg.Subject, endPoint.pathSeparator)[0]
+
+			var matchSubject string
+			if endPoint.pathHasWildcards {
+				matchSubject = msg.Subject
 			} else {
-				matchSubject = ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), endPoint.pathSeparator)[1]
+				if endPoint.pathSeparator == "/" {
+					matchSubject = strings.Split(msg.Subject, endPoint.pathSeparator)[0]
+				} else {
+					matchSubject = ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), endPoint.pathSeparator)[1]
+				}
 			}
 
 			match, matchErr := endPoint.matchRegex.MatchString(matchSubject)
@@ -327,10 +359,6 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 		}
 		msg.Data = bytes
 	}
-	params, err := extractParams(endpoint.paramRegex, msg.Subject, ns.basePath+"."+endpoint.path)
-	if err != nil {
-		return nil, err
-	}
 
 	natsMessage := NatsMessage{
 		Body:            msg.Data,
@@ -338,10 +366,20 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 		Path:            msg.Subject,
 		MessageId:       messageId,
 		UserId:          userId,
-		Parameters:      params,
 		Logger:          createLogger(messageId),
 		OriginalMessage: msg,
 	}
+
+	if endpoint.paramRegex != nil {
+		var err error
+		natsMessage.Parameters, err = extractParams(endpoint.paramRegex, msg.Subject, ns.basePath+"."+endpoint.path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		natsMessage.Parameters = make(map[string]string)
+	}
+
 	return &natsMessage, nil
 }
 
