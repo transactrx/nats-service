@@ -136,6 +136,9 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 	matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
 
 	matchRegex, err := regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
+	if err != nil {
+		return fmt.Errorf("invalid regex expression: %w", err)
+	}
 
 	paramReg, err := convertToRegex(fullPath, pathSeparator)
 	if err != nil {
