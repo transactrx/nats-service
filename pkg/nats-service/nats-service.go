@@ -112,6 +112,15 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 
 func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error {
 
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("endpoint path cannot be empty")
+	}
+
+	if endPoint == nil {
+		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
+	}
+
 	pathSeparator := "."
 	if strings.Contains(path, "/") {
 		pathSeparator = "/"
@@ -121,10 +130,6 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		if endPoint.path == path {
 			return fmt.Errorf("endpoint already in use: %w", ConfigError)
 		}
-	}
-
-	if endPoint == nil {
-		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
 	}
 
 	fullPath := ns.basePath + "." + path
