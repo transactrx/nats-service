@@ -242,7 +242,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	if requestErr != nil {
 		natError := NewValidationError("error parsing request", 400, requestErr)
 		responseMsg.Header = nats.Header{}
-		responseMsg.Header.Set("status", "400")
+		responseMsg.Header.Set(nats_service_common.STATUS, "400")
 		jsonBA, jsonError := json.Marshal(natError)
 
 		if jsonError != nil {
@@ -276,7 +276,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 
 		status = fmt.Sprintf("%d", err.Status)
 		responseMsg.Header = nats.Header{}
-		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(nats_service_common.STATUS, status)
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 
 		jsonBA, jsonError := json.Marshal(err)
@@ -319,7 +319,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			}
 		}
 		responseMsg.Data = natsMessage.ResponseBody
-		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(nats_service_common.STATUS, status)
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 	}
 
@@ -391,7 +391,7 @@ func handleEndpointNotFound(msg *nats.Msg) {
 	responseMsg := nats.Msg{}
 	responseMsg.Header = nats.Header{}
 
-	responseMsg.Header.Set("status", "404")
+	responseMsg.Header.Set(nats_service_common.STATUS, "404")
 	notFoundError := NewEndpointNotFoundError(msg.Subject)
 
 	errorText, err := json.Marshal(notFoundError)
@@ -408,7 +408,7 @@ func handleEndpointInternalException(msg *nats.Msg, err error) {
 	responseMsg := nats.Msg{}
 	responseMsg.Header = nats.Header{}
 
-	responseMsg.Header.Set("status", "500")
+	responseMsg.Header.Set(nats_service_common.STATUS, "500")
 	notFoundError := NewServerError("Error while parsing request path", 500, err)
 
 	errorText, err := json.Marshal(notFoundError)
