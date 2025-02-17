@@ -294,7 +294,6 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			responseMsgLog = responseMsg.Data[:1024]
 		}
 	} else {
-		status = "200"
 		if natsMessage.ResponseHeader != nil {
 			responseMsg.Header = natsMessage.ResponseHeader
 		} else {
@@ -319,7 +318,13 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			}
 		}
 		responseMsg.Data = natsMessage.ResponseBody
-		responseMsg.Header.Set(nats_service_common.STATUS, status)
+
+		// Set the status header only if the handler function did not set it.
+		// Although 200 is OK to indicate success, this allows the individual handlers to use other
+		// more appropriate codes as needed - 201, 202, 204, etc.
+		if responseMsg.Header.Get(nats_service_common.STATUS) == "" {
+			responseMsg.Header.Set(nats_service_common.STATUS, "200")
+		}
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 	}
 
