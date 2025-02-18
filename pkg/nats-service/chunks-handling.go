@@ -8,6 +8,7 @@ import (
 	"github.com/nats-io/nats.go"
 	nats_service_common "github.com/transactrx/nats-service/pkg/nats-service-common"
 	"log"
+	"runtime/debug"
 	"strconv"
 	"time"
 )
@@ -28,22 +29,29 @@ func (ns *NatService) startChunkResponder() error {
 }
 
 func (ns *NatService) cleanCacheService() {
-	for true {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: cleanCacheService experienced a fatal error: %s. Stack trace\n%s\n", r, debug.Stack())
+		}
+	}()
+
+	for {
 		if ns.chunkCache.Len() > 0 {
 			log.Printf("cleanCacheService: cleaning cache")
 			log.Printf("cleanCacheService: cache size: %d", ns.chunkCache.Len())
 			ns.chunkCache.DeleteExpired()
 			log.Printf("cleanCacheService: cache cleaned")
 			log.Printf("cleanCacheService: cache size: %d", ns.chunkCache.Len())
-
 		}
 		if !ns.chunkedSubscription.IsValid() {
 			log.Print("cleanCacheService: chunkedSubscription is not valid, exiting")
 		} else {
-			log.Print("cleanCacheService: chunkedSubscription is valid")
+			if ns.debug {
+				log.Print("cleanCacheService: chunkedSubscription is valid")
+			}
 		}
 		time.Sleep(60 * time.Second)
-
 	}
 }
 

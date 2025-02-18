@@ -108,10 +108,10 @@ func NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl string, maxSizeBef
 	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
-		log.Printf("%s Connect failed error: %s", time.Now(), err)
+		log.Printf("ERROR: Failed to connect to NATS server at %s: %s", natsUrl, err)
 		return nil, err
 	}
-	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
+	log.Printf("Connected to NATS server at %s", natsUrl)
 
 	client := Client{
 		nc:                    nc,
