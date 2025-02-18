@@ -47,11 +47,12 @@ type NatsMessage struct {
 }
 
 type NatsEndpoint struct {
-	path          string
-	endPointFunc  NatsEndpointFunc
-	paramRegex    *regexp2.Regexp
-	matchRegex    *regexp2.Regexp
-	pathSeparator string
+	path             string
+	endPointFunc     NatsEndpointFunc
+	paramRegex       *regexp2.Regexp
+	matchRegex       *regexp2.Regexp
+	pathSeparator    string
+	pathHasWildcards bool
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -91,10 +92,10 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 	opts = setupConnOptions(opts)
 	nc, err := nats.Connect(natsUrl, opts...)
 	if err != nil {
-		log.Printf("%s Connect failed error: %s", time.Now(), err)
+		log.Printf("ERROR: Failed to connect to NATS server at %s: %s", natsUrl, err)
 		return nil, err
 	}
-	log.Printf("%s Connect CONNECTED to %s SUCCESS ", time.Now(), natsUrl)
+	log.Printf("Connected to NATS server at %s", natsUrl)
 
 	ns := NatService{
 		url:                   natsUrl,
@@ -112,6 +113,15 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 
 func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error {
 
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("endpoint path cannot be empty")
+	}
+
+	if endPoint == nil {
+		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
+	}
+
 	pathSeparator := "."
 	if strings.Contains(path, "/") {
 		pathSeparator = "/"
@@ -123,26 +133,51 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		}
 	}
 
-	if endPoint == nil {
-		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
-	}
-
-	fullPath := ns.basePath + "." + path
-	matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
-
-	matchRegex, err := regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
-
-	paramReg, err := convertToRegex(fullPath, pathSeparator)
-	if err != nil {
-		return fmt.Errorf("invalid regex expression: %w", err)
-	}
-
 	natsEndpoint := NatsEndpoint{
 		path:          path,
 		endPointFunc:  endPoint,
-		paramRegex:    paramReg,
-		matchRegex:    matchRegex,
 		pathSeparator: pathSeparator,
+	}
+
+	hasWildcardSuffix := strings.HasSuffix(path, ">")
+	if hasWildcardSuffix || strings.ContainsAny(path, "*") {
+		// Escape periods since they are special in regex
+		matchPath := strings.ReplaceAll(path, ".", `\.`)
+		// * in NATS means match anything between 2 periods
+		matchPath = strings.ReplaceAll(matchPath, "*", "[^.]+")
+		if hasWildcardSuffix {
+			// > suffix in NATS means replace anything after preceding period
+			// We simply remove the suffix - the expression will match anything until end of string
+			matchPath = "^" + ns.basePath + "." + strings.TrimSuffix(matchPath, ">")
+		} else {
+			// Adding $ suffix ensures match on the exact same number of previously escaped subject tokens
+			matchPath = "^" + ns.basePath + "." + matchPath + "$"
+		}
+
+		var err error
+		natsEndpoint.matchRegex, err = regexp2.Compile(matchPath, regexp2.RE2)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
+
+		natsEndpoint.pathHasWildcards = true
+		natsEndpoint.paramRegex = nil
+	} else {
+		fullPath := ns.basePath + "." + path
+		matchFullPath := ns.basePath + "." + strings.Split(path, pathSeparator)[0]
+
+		var err error
+		natsEndpoint.matchRegex, err = regexp2.Compile("^"+matchFullPath+"$", regexp2.RE2)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
+
+		natsEndpoint.pathHasWildcards = false
+
+		natsEndpoint.paramRegex, err = convertToRegex(fullPath, pathSeparator)
+		if err != nil {
+			return fmt.Errorf("invalid regex expression: %w", err)
+		}
 	}
 
 	ns.endPoints = append(ns.endPoints, &natsEndpoint)
@@ -161,11 +196,16 @@ func (ns *NatService) Start() error {
 			if msg.Subject == ns.basePath {
 				break
 			}
-			matchSubject := ""
-			if endPoint.pathSeparator == "/" {
-				matchSubject = strings.Split(msg.Subject, endPoint.pathSeparator)[0]
+
+			var matchSubject string
+			if endPoint.pathHasWildcards {
+				matchSubject = msg.Subject
 			} else {
-				matchSubject = ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), endPoint.pathSeparator)[1]
+				if endPoint.pathSeparator == "/" {
+					matchSubject = strings.Split(msg.Subject, endPoint.pathSeparator)[0]
+				} else {
+					matchSubject = ns.basePath + "." + strings.Split(strings.Replace(msg.Subject, ns.basePath, "", 1), endPoint.pathSeparator)[1]
+				}
 			}
 
 			match, matchErr := endPoint.matchRegex.MatchString(matchSubject)
@@ -202,7 +242,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	if requestErr != nil {
 		natError := NewValidationError("error parsing request", 400, requestErr)
 		responseMsg.Header = nats.Header{}
-		responseMsg.Header.Set("status", "400")
+		responseMsg.Header.Set(nats_service_common.STATUS, "400")
 		jsonBA, jsonError := json.Marshal(natError)
 
 		if jsonError != nil {
@@ -236,7 +276,7 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 
 		status = fmt.Sprintf("%d", err.Status)
 		responseMsg.Header = nats.Header{}
-		responseMsg.Header.Set("status", status)
+		responseMsg.Header.Set(nats_service_common.STATUS, status)
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 
 		jsonBA, jsonError := json.Marshal(err)
@@ -254,7 +294,6 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			responseMsgLog = responseMsg.Data[:1024]
 		}
 	} else {
-		status = "200"
 		if natsMessage.ResponseHeader != nil {
 			responseMsg.Header = natsMessage.ResponseHeader
 		} else {
@@ -279,7 +318,13 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 			}
 		}
 		responseMsg.Data = natsMessage.ResponseBody
-		responseMsg.Header.Set("status", status)
+
+		// Set the status header only if the handler function did not set it.
+		// Although 200 is OK to indicate success, this allows the individual handlers to use other
+		// more appropriate codes as needed - 201, 202, 204, etc.
+		if responseMsg.Header.Get(nats_service_common.STATUS) == "" {
+			responseMsg.Header.Set(nats_service_common.STATUS, "200")
+		}
 		responseMsg.Header.Set(nats_service_common.MESSAGE_ID, natsMessage.MessageId)
 	}
 
@@ -319,10 +364,6 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 		}
 		msg.Data = bytes
 	}
-	params, err := extractParams(endpoint.paramRegex, msg.Subject, ns.basePath+"."+endpoint.path)
-	if err != nil {
-		return nil, err
-	}
 
 	natsMessage := NatsMessage{
 		Body:            msg.Data,
@@ -330,10 +371,20 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 		Path:            msg.Subject,
 		MessageId:       messageId,
 		UserId:          userId,
-		Parameters:      params,
 		Logger:          createLogger(messageId),
 		OriginalMessage: msg,
 	}
+
+	if endpoint.paramRegex != nil {
+		var err error
+		natsMessage.Parameters, err = extractParams(endpoint.paramRegex, msg.Subject, ns.basePath+"."+endpoint.path)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		natsMessage.Parameters = make(map[string]string)
+	}
+
 	return &natsMessage, nil
 }
 
@@ -345,7 +396,7 @@ func handleEndpointNotFound(msg *nats.Msg) {
 	responseMsg := nats.Msg{}
 	responseMsg.Header = nats.Header{}
 
-	responseMsg.Header.Set("status", "404")
+	responseMsg.Header.Set(nats_service_common.STATUS, "404")
 	notFoundError := NewEndpointNotFoundError(msg.Subject)
 
 	errorText, err := json.Marshal(notFoundError)
@@ -362,7 +413,7 @@ func handleEndpointInternalException(msg *nats.Msg, err error) {
 	responseMsg := nats.Msg{}
 	responseMsg.Header = nats.Header{}
 
-	responseMsg.Header.Set("status", "500")
+	responseMsg.Header.Set(nats_service_common.STATUS, "500")
 	notFoundError := NewServerError("Error while parsing request path", 500, err)
 
 	errorText, err := json.Marshal(notFoundError)
