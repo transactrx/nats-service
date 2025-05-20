@@ -14,7 +14,7 @@ func main() {
 		log.Panic(err)
 	}
 
-	exampleWithOutExceptions(client)
+	exampleWithoutExceptions(client)
 	//
 	exampleWithExceptions(client)
 	////
@@ -22,7 +22,7 @@ func main() {
 	exampleLargeBodyTestCompression(client)
 }
 
-func exampleWithOutExceptions(client *nats_service_client.Client) {
+func exampleWithoutExceptions(client *nats_service_client.Client) {
 	rspMsg, svcErr, err := client.DoRequest("id13213", "rx.api.getTime", nil, nil, time.Second*10)
 
 	//	error connecting to service
