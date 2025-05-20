@@ -17,7 +17,7 @@ func getTime(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 	paramOne := msg.Parameters["parameterOne"]
 	paramTwo := msg.Parameters["parameterTwo"]
 
-	log.Printf("paramterOne: %s parameterTwo: %s", paramOne, paramTwo)
+	log.Printf("parameterOne: %s parameterTwo: %s", paramOne, paramTwo)
 
 	s := fmt.Sprintf("The time is %s", time.Now())
 
@@ -66,7 +66,7 @@ func main() {
 		if err != nil {
 			log.Printf("Error: Shutdown failed, %v", err)
 		} else {
-			log.Printf("Shutdown Succesfull, yea!")
+			log.Printf("Shutdown Successful, yeah!")
 			os.Exit(0)
 		}
 	}()
