@@ -9,6 +9,7 @@ import (
 	"syscall"
 )
 
+
 func main() {
 
 	natservice, err := nats_service.New("rx.api")
@@ -44,7 +45,7 @@ func main() {
 		if err != nil {
 			log.Printf("Error: Shutdown failed, %v", err)
 		} else {
-			log.Printf("Shutdown Succesfull, yea!")
+			log.Printf("Shutdown Successful, yeah!")
 			os.Exit(0)
 		}
 	}()
