@@ -9,7 +9,7 @@ set -e
 echo "Waiting for NATS to start..."
 attempts=0
 limit=30 # Roughly 30 seconds
-until nc -z nats 4222; do
+until nc -z localhost 4222; do
   attempts=$((attempts+1))
   if [ $attempts -gt $limit ]; then
     echo "NATS did not start in time. Exiting."

@@ -4,8 +4,45 @@ on:
       - Production
 
 jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats:alpine
+        ports:
+          - 4222:4222
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.24.3
+      
+      - name: Wait for NATS
+        run: |
+          apt-get update && apt-get install -y netcat
+          echo "Waiting for NATS to start..."
+          attempts=0
+          limit=30
+          until nc -z localhost 4222; do
+            attempts=$((attempts+1))
+            if [ $attempts -gt $limit ]; then
+              echo "NATS did not start in time. Exiting."
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "NATS started."
+      
+      - name: Run tests
+        run: go test -v ./...
+
   release-on-push:
     runs-on: ubuntu-latest
+    needs: test
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

@@ -2,8 +2,6 @@ module github.com/transactrx/nats-service
 
 go 1.24.3
 
-toolchain go1.24.3
-
 require (
 	github.com/dlclark/regexp2 v1.11.5
 	github.com/google/uuid v1.6.0

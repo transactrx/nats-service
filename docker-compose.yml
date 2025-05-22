@@ -18,6 +18,7 @@ services:
     environment:
       # Example environment variable, if your app needs to know NATS address
       NATS_URL: nats://nats:4222
+      NATS_QUEUE_NAME: testing
     # The command to run tests will be specified in the run_tests.sh script
     # For local development, you might want to override the command to run the service:
     # command: ["./nats-service-example"]
