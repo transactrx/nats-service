@@ -3,3 +3,6 @@
 *.exe
 cmd/nats-service-example/nats-service
 cmd/requester-example/requester
+
+# Uncomment this line if you DON'T want to check in vendor directory
+# /vendor/
