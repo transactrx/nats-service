@@ -38,7 +38,7 @@ jobs:
           echo "NATS started."
       
       - name: Run tests
-        run: NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -v ./...
+        run: NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -mod=vendor -v ./...
 
   release-on-push:
     runs-on: ubuntu-latest
