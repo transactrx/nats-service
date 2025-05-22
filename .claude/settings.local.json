@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker-compose up -d nats)",
+      "Bash(NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -v ./pkg/nats-service)"
+    ],
+    "deny": []
+  }
+}
