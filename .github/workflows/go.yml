@@ -21,10 +21,10 @@ jobs:
     - name: Build
       run: go build -mod=vendor -v ./...
 
-    - name: Install Docker Compose
+    - name: Setup Docker Compose
       run: |
-        sudo apt-get update
-        sudo apt-get install -y docker-compose-plugin
+        # Docker Compose is already installed in GitHub Actions runners
+        docker-compose --version
 
     - name: Run tests with docker-compose
       run: |
