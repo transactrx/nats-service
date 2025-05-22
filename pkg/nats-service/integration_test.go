@@ -29,7 +29,8 @@ func TestNATSIntegration(t *testing.T) {
 	// Create and start the NATS service with the provided URL
 	natService, err := nats_service.NewLowLevelDebug("rx.api", queueName, natsURL, "", "", 1024*2, 1024*300, true) // Enable debug
 	if err != nil {
-		t.Fatalf("Failed to create NATS service: %v", err)
+		t.Skipf("Skipping integration tests as NATS is not available: %v", err)
+		return
 	}
 	
 	// Register endpoints

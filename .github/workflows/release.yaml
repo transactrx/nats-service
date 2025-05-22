@@ -23,7 +23,7 @@ jobs:
       
       - name: Wait for NATS
         run: |
-          apt-get update && apt-get install -y netcat
+          sudo apt-get update && sudo apt-get install -y netcat
           echo "Waiting for NATS to start..."
           attempts=0
           limit=30

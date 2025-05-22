@@ -11,6 +11,11 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats:alpine
+        ports:
+          - 4222:4222
     steps:
     - uses: actions/checkout@v3
 
@@ -19,8 +24,24 @@ jobs:
       with:
         go-version: 1.24.3
 
+    - name: Wait for NATS
+      run: |
+        sudo apt-get update && sudo apt-get install -y netcat
+        echo "Waiting for NATS to start..."
+        attempts=0
+        limit=30
+        until nc -z localhost 4222; do
+          attempts=$((attempts+1))
+          if [ $attempts -gt $limit ]; then
+            echo "NATS did not start in time. Exiting."
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "NATS started."
+
     - name: Build
       run: go build -mod=vendor -v ./...
 
     - name: Test
-      run: go test -mod=vendor -v ./...
+      run: NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -mod=vendor -v ./...
