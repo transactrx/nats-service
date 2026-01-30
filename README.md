@@ -159,7 +159,7 @@ service.AddEndpoint("ping", pingHandler)
 ### Single Endpoint with Documentation
 
 ```go
-// Endpoint with full documentation
+// Endpoint with full documentation including response
 service.AddEndpointWithDoc(
     "orders.:orderId",
     "Get order by ID",
@@ -168,6 +168,11 @@ service.AddEndpointWithDoc(
     },
     []nats_service.ParameterDoc{
         {Name: "orderId", Description: "Order identifier", Required: true, Example: "ORD-456"},
+    },
+    &nats_service.ResponseDoc{
+        Description: "Order details in JSON format",
+        ContentType: "application/json",
+        Example:     `{"id": "ORD-456", "status": "pending"}`,
     },
     getOrderHandler,
 )
@@ -180,6 +185,7 @@ endpoints := []nats_service.EndpointRegistration{
     {
         Path:        "health",
         Description: "Health check endpoint",
+        Response:    &nats_service.ResponseDoc{Description: "OK", ContentType: "text/plain"},
         Handler:     healthHandler,
     },
     {
@@ -190,6 +196,10 @@ endpoints := []nats_service.EndpointRegistration{
         },
         Parameters: []nats_service.ParameterDoc{
             {Name: "orderId", Description: "Order ID", Required: true, Example: "ORD-123"},
+        },
+        Response: &nats_service.ResponseDoc{
+            Description: "Order details",
+            ContentType: "application/json",
         },
         Handler: getOrderHandler,
     },
@@ -287,15 +297,18 @@ nats-discover -s nats://localhost:4222 --format yaml
 SERVICE     SUBJECT PATTERN                  EXAMPLE                         DESCRIPTION
 -------     ---------------                  -------                         -----------
 myapp.api   myapp.api.health                 -                               Health check endpoint
+              Response: text/plain - OK
 myapp.api   myapp.api.orders.:orderId        myapp.api.orders.ORD-123        Get order by ID
               Params: orderId* (Order identifier)
               Headers: Authorization*
+              Response: application/json - Order details
 ```
 
 The output shows:
 - **SUBJECT PATTERN**: The NATS subject with `:param` placeholders
 - **EXAMPLE**: A concrete example showing the actual subject to call
 - **Params/Headers**: Documentation for parameters and headers (`*` = required)
+- **Response**: Content type and description of what the endpoint returns
 
 See [docs/endpoint-discovery.md](docs/endpoint-discovery.md) for complete documentation.
 

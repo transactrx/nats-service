@@ -99,7 +99,7 @@ cd cmd/requester-example && NATS_URL=nats://localhost:4222 go run main.go
 - Endpoints are matched by regex against incoming NATS subjects
 - Path separator can be `.` or `/` (detected automatically)
 - Parameters extracted via regex named groups
-- Use `AddEndpointWithDoc(path, desc, headers, params, handler)` to include documentation for discovery
+- Use `AddEndpointWithDoc(path, desc, headers, params, response, handler)` to include documentation for discovery
 - Use `AddEndpointWithDocs()` for batch registration with documentation
 - Parameter names are auto-discovered from path; user docs add descriptions/examples
 
@@ -217,15 +217,16 @@ nats-discover -s nats://localhost:4222 --timeout 5s
 
 ### Registering Endpoints with Documentation
 ```go
-// Single endpoint with description (pass nil for headers/params if not needed)
-err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", nil, nil, userHandler)
+// Single endpoint with description (pass nil for headers/params/response if not needed)
+err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", nil, nil, nil, userHandler)
 
-// Single endpoint with full documentation
+// Single endpoint with full documentation including response
 err := service.AddEndpointWithDoc(
     "orders.:orderId",
     "Get order by ID",
     []nats_service.HeaderDoc{{Name: "Authorization", Required: true}},
     []nats_service.ParameterDoc{{Name: "orderId", Description: "Order ID", Required: true}},
+    &nats_service.ResponseDoc{Description: "Order details", ContentType: "application/json"},
     orderHandler,
 )
 
@@ -238,6 +239,7 @@ endpoints := []nats_service.EndpointRegistration{
         Parameters: []nats_service.ParameterDoc{
             {Name: "userId", Description: "User identifier", Required: true},
         },
+        Response: &nats_service.ResponseDoc{Description: "User object"},
         Handler: userHandler,
     },
 }

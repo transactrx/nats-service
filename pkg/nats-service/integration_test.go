@@ -287,7 +287,7 @@ func TestAddEndpointWithDoc(t *testing.T) {
 		return nil
 	}
 
-	err = natService.AddEndpointWithDoc("ping", "Health check endpoint", nil, nil, handler)
+	err = natService.AddEndpointWithDoc("ping", "Health check endpoint", nil, nil, nil, handler)
 	if err != nil {
 		t.Fatalf("Failed to add endpoint with doc: %v", err)
 	}
