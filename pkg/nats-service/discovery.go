@@ -34,6 +34,13 @@ type ParameterDoc struct {
 	Example     string `json:"example,omitempty"`
 }
 
+// ResponseDoc represents documentation for an endpoint's response
+type ResponseDoc struct {
+	Description string `json:"description,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	Example     string `json:"example,omitempty"`
+}
+
 // EndpointDoc represents documentation for a single endpoint
 type EndpointDoc struct {
 	Path           string         `json:"path"`
@@ -41,6 +48,7 @@ type EndpointDoc struct {
 	ExampleSubject string         `json:"exampleSubject,omitempty"`
 	Parameters     []ParameterDoc `json:"parameters,omitempty"`
 	Headers        []HeaderDoc    `json:"headers,omitempty"`
+	Response       *ResponseDoc   `json:"response,omitempty"`
 	Description    string         `json:"description,omitempty"`
 	WildcardType   string         `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
 }
@@ -126,6 +134,11 @@ func (ns *NatService) buildEndpointDocs() []EndpointDoc {
 		// Include headers if provided
 		if len(ep.headers) > 0 {
 			doc.Headers = ep.headers
+		}
+
+		// Include response documentation if provided
+		if ep.response != nil {
+			doc.Response = ep.response
 		}
 
 		docs = append(docs, doc)

@@ -403,6 +403,18 @@ func outputYAML(responses []nats_service.DiscoveryResponse) error {
 					}
 				}
 			}
+			if ep.Response != nil {
+				fmt.Println("    response:")
+				if ep.Response.Description != "" {
+					fmt.Printf("      description: %s\n", ep.Response.Description)
+				}
+				if ep.Response.ContentType != "" {
+					fmt.Printf("      contentType: %s\n", ep.Response.ContentType)
+				}
+				if ep.Response.Example != "" {
+					fmt.Printf("      example: %s\n", ep.Response.Example)
+				}
+			}
 			if ep.Description != "" {
 				fmt.Printf("    description: %s\n", ep.Description)
 			}
@@ -434,8 +446,8 @@ func outputTable(responses []nats_service.DiscoveryResponse) error {
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, example, desc)
 
-			// Show parameters and headers on separate lines if present
-			if len(ep.Parameters) > 0 || len(ep.Headers) > 0 {
+			// Show parameters, headers, and response on separate lines if present
+			if len(ep.Parameters) > 0 || len(ep.Headers) > 0 || ep.Response != nil {
 				// Parameters
 				if len(ep.Parameters) > 0 {
 					paramDetails := make([]string, 0, len(ep.Parameters))
@@ -463,6 +475,23 @@ func outputTable(responses []nats_service.DiscoveryResponse) error {
 						headerDetails = append(headerDetails, detail)
 					}
 					fmt.Fprintf(w, "\t  Headers: %s\t\t\n", strings.Join(headerDetails, ", "))
+				}
+
+				// Response
+				if ep.Response != nil {
+					responseDetail := ""
+					if ep.Response.ContentType != "" {
+						responseDetail = ep.Response.ContentType
+					}
+					if ep.Response.Description != "" {
+						if responseDetail != "" {
+							responseDetail += " - "
+						}
+						responseDetail += ep.Response.Description
+					}
+					if responseDetail != "" {
+						fmt.Fprintf(w, "\t  Response: %s\t\t\n", responseDetail)
+					}
 				}
 			}
 		}
