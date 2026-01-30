@@ -237,7 +237,10 @@ func contextToOptions(ctx *natsContext) []nats.Option {
 }
 
 func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.DiscoveryResponse, error) {
-	var responses []nats_service.DiscoveryResponse
+	// Use a map to deduplicate endpoints by full subject
+	// Multiple instances of the same service will respond, but we only need one of each endpoint
+	endpointMap := make(map[string]nats_service.EndpointDoc)
+	serviceMap := make(map[string]string) // serviceName -> basePath
 	var mu sync.Mutex
 
 	// Create an inbox for receiving responses
@@ -250,7 +253,14 @@ func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.Disc
 			return // Skip malformed responses
 		}
 		mu.Lock()
-		responses = append(responses, resp)
+		// Track service info
+		serviceMap[resp.ServiceName] = resp.BasePath
+		// Deduplicate endpoints by full subject
+		for _, ep := range resp.Endpoints {
+			if _, exists := endpointMap[ep.FullSubject]; !exists {
+				endpointMap[ep.FullSubject] = ep
+			}
+		}
 		mu.Unlock()
 	})
 	if err != nil {
@@ -271,12 +281,54 @@ func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.Disc
 	// Wait for responses
 	time.Sleep(timeout)
 
+	// Group endpoints by service name (extracted from fullSubject prefix)
+	serviceEndpoints := make(map[string][]nats_service.EndpointDoc)
+	for _, ep := range endpointMap {
+		// Extract service name from full subject (everything before the endpoint path)
+		serviceName := extractServiceName(ep.FullSubject, ep.Path)
+		serviceEndpoints[serviceName] = append(serviceEndpoints[serviceName], ep)
+	}
+
+	// Build response list
+	responses := make([]nats_service.DiscoveryResponse, 0, len(serviceEndpoints))
+	for serviceName, endpoints := range serviceEndpoints {
+		// Sort endpoints within each service
+		sort.Slice(endpoints, func(i, j int) bool {
+			return endpoints[i].FullSubject < endpoints[j].FullSubject
+		})
+
+		basePath := serviceMap[serviceName]
+		if basePath == "" {
+			basePath = serviceName
+		}
+
+		responses = append(responses, nats_service.DiscoveryResponse{
+			ServiceName: serviceName,
+			BasePath:    basePath,
+			Endpoints:   endpoints,
+		})
+	}
+
 	// Sort responses by service name
 	sort.Slice(responses, func(i, j int) bool {
 		return responses[i].ServiceName < responses[j].ServiceName
 	})
 
 	return responses, nil
+}
+
+// extractServiceName extracts the service name from the full subject
+func extractServiceName(fullSubject, path string) string {
+	// fullSubject is like "orders.api.health" and path is "health"
+	// service name would be "orders.api"
+	if path == "" {
+		return fullSubject
+	}
+	suffix := "." + path
+	if strings.HasSuffix(fullSubject, suffix) {
+		return strings.TrimSuffix(fullSubject, suffix)
+	}
+	return fullSubject
 }
 
 func outputResults(responses []nats_service.DiscoveryResponse, format string) error {
@@ -321,6 +373,21 @@ func outputYAML(responses []nats_service.DiscoveryResponse) error {
 			if len(ep.Parameters) > 0 {
 				fmt.Printf("    parameters: [%s]\n", strings.Join(ep.Parameters, ", "))
 			}
+			if len(ep.Headers) > 0 {
+				fmt.Println("    headers:")
+				for _, h := range ep.Headers {
+					fmt.Printf("      - name: %s\n", h.Name)
+					if h.Description != "" {
+						fmt.Printf("        description: %s\n", h.Description)
+					}
+					if h.Required {
+						fmt.Printf("        required: true\n")
+					}
+					if h.Example != "" {
+						fmt.Printf("        example: %s\n", h.Example)
+					}
+				}
+			}
 			if ep.Description != "" {
 				fmt.Printf("    description: %s\n", ep.Description)
 			}
@@ -335,8 +402,8 @@ func outputYAML(responses []nats_service.DiscoveryResponse) error {
 func outputTable(responses []nats_service.DiscoveryResponse) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintf(w, "SERVICE\tENDPOINT\tPARAMETERS\tDESCRIPTION\n")
-	fmt.Fprintf(w, "-------\t--------\t----------\t-----------\n")
+	fmt.Fprintf(w, "SERVICE\tENDPOINT\tPARAMETERS\tHEADERS\tDESCRIPTION\n")
+	fmt.Fprintf(w, "-------\t--------\t----------\t-------\t-----------\n")
 
 	for _, resp := range responses {
 		for _, ep := range resp.Endpoints {
@@ -351,12 +418,25 @@ func outputTable(responses []nats_service.DiscoveryResponse) error {
 				params += fmt.Sprintf("[%s wildcard]", ep.WildcardType)
 			}
 
-			desc := ep.Description
-			if len(desc) > 50 {
-				desc = desc[:47] + "..."
+			headers := ""
+			if len(ep.Headers) > 0 {
+				headerNames := make([]string, 0, len(ep.Headers))
+				for _, h := range ep.Headers {
+					name := h.Name
+					if h.Required {
+						name += "*"
+					}
+					headerNames = append(headerNames, name)
+				}
+				headers = strings.Join(headerNames, ", ")
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, params, desc)
+			desc := ep.Description
+			if len(desc) > 40 {
+				desc = desc[:37] + "..."
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, params, headers, desc)
 		}
 	}
 

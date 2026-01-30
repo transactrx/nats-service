@@ -18,13 +18,22 @@ type DiscoveryResponse struct {
 	Endpoints   []EndpointDoc `json:"endpoints"`
 }
 
+// HeaderDoc represents documentation for a single header
+type HeaderDoc struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+	Example     string `json:"example,omitempty"`
+}
+
 // EndpointDoc represents documentation for a single endpoint
 type EndpointDoc struct {
-	Path         string   `json:"path"`
-	FullSubject  string   `json:"fullSubject"`
-	Parameters   []string `json:"parameters,omitempty"`
-	Description  string   `json:"description,omitempty"`
-	WildcardType string   `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
+	Path         string      `json:"path"`
+	FullSubject  string      `json:"fullSubject"`
+	Parameters   []string    `json:"parameters,omitempty"`
+	Headers      []HeaderDoc `json:"headers,omitempty"`
+	Description  string      `json:"description,omitempty"`
+	WildcardType string      `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
 }
 
 // registerDiscoveryEndpoint subscribes to the discovery subject.
@@ -96,6 +105,11 @@ func (ns *NatService) buildEndpointDocs() []EndpointDoc {
 		// Include description if provided
 		if ep.description != "" {
 			doc.Description = ep.description
+		}
+
+		// Include headers if provided
+		if len(ep.headers) > 0 {
+			doc.Headers = ep.headers
 		}
 
 		docs = append(docs, doc)

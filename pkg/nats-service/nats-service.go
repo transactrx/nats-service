@@ -55,6 +55,7 @@ type NatsEndpoint struct {
 	pathSeparator    string
 	pathHasWildcards bool
 	description      string
+	headers          []HeaderDoc
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -205,6 +206,7 @@ func (ns *NatService) AddEndpointWithDoc(path string, description string, endPoi
 type EndpointRegistration struct {
 	Path        string
 	Description string
+	Headers     []HeaderDoc
 	Handler     NatsEndpointFunc
 }
 
@@ -214,9 +216,13 @@ type EndpointRegistration struct {
 // and any previously registered endpoints in this batch remain registered.
 func (ns *NatService) AddEndpointWithDocs(endpoints []EndpointRegistration) error {
 	for _, ep := range endpoints {
-		if err := ns.AddEndpointWithDoc(ep.Path, ep.Description, ep.Handler); err != nil {
+		if err := ns.AddEndpoint(ep.Path, ep.Handler); err != nil {
 			return fmt.Errorf("failed to register endpoint '%s': %w", ep.Path, err)
 		}
+		// Set description and headers on the last added endpoint
+		lastEp := ns.endPoints[len(ns.endPoints)-1]
+		lastEp.description = ep.Description
+		lastEp.headers = ep.Headers
 	}
 	return nil
 }
