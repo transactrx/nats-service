@@ -88,9 +88,10 @@ cd cmd/requester-example && NATS_URL=nats://localhost:4222 go run main.go
 - Automatic decompression by recipient
 
 **Endpoint Discovery**: Services automatically register for discovery
-- Discovery subject: `_discovery.all`
-- Returns service name, base path, and all registered endpoints
-- Includes parameter names, descriptions, and wildcard types
+- Discovery subject: `_discovery.all` returns basic service info (name, prefix, description)
+- API docs subject: `{basePath}._api_docs` returns full endpoint documentation
+- Two-phase discovery: list services first, then fetch details for specific service
+- Use `SetDescription()` to add a service description for discovery
 - Graceful degradation if subscription fails (service continues normally)
 
 ### Important Implementation Details
@@ -199,11 +200,16 @@ The `nats-discover` CLI tool discovers all services running the nats-service fra
 # Build the CLI
 go build -o nats-discover ./cmd/nats-discover
 
-# Discover services (table format)
+# List all services (returns basic info: name, prefix, description)
 nats-discover -s nats://localhost:4222
+
+# Get full API docs for a specific service
+nats-discover -s nats://localhost:4222 -S orders.api
+nats-discover -s nats://localhost:4222 --service orders.api
 
 # JSON output
 nats-discover -s nats://localhost:4222 --format json
+nats-discover -s nats://localhost:4222 -S orders.api --format json
 
 # YAML output
 nats-discover -s nats://localhost:4222 --format yaml
@@ -217,6 +223,9 @@ nats-discover -s nats://localhost:4222 --timeout 5s
 
 ### Registering Endpoints with Documentation
 ```go
+// Set service description (shown in discovery responses)
+service.SetDescription("Order management API - handles order CRUD operations")
+
 // Single endpoint with description (pass nil for headers/params/response if not needed)
 err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", nil, nil, nil, userHandler)
 

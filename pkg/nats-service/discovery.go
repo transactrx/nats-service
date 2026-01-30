@@ -11,7 +11,28 @@ import (
 // DiscoverySubject is the subject used for service discovery
 const DiscoverySubject = "_discovery.all"
 
+// ApiDocsSubjectSuffix is the suffix for the API documentation subject
+const ApiDocsSubjectSuffix = "_api_docs"
+
+// ServiceInfo represents the basic service information returned by discovery
+type ServiceInfo struct {
+	ServiceName    string `json:"serviceName"`
+	SubjectPrefix  string `json:"subjectPrefix"`
+	Description    string `json:"description,omitempty"`
+	ApiDocsSubject string `json:"apiDocsSubject,omitempty"`
+}
+
+// ApiDocsResponse represents the full API documentation for a service
+type ApiDocsResponse struct {
+	ServiceName   string          `json:"serviceName"`
+	SubjectPrefix string          `json:"subjectPrefix"`
+	Description   string          `json:"description,omitempty"`
+	StatusCodes   []StatusCodeDoc `json:"statusCodes,omitempty"` // Standard status codes for all endpoints
+	Endpoints     []EndpointDoc   `json:"endpoints"`
+}
+
 // DiscoveryResponse represents a service's response to a discovery request
+// Deprecated: Use ServiceInfo for basic discovery and ApiDocsResponse for full documentation
 type DiscoveryResponse struct {
 	ServiceName string        `json:"serviceName"`
 	BasePath    string        `json:"basePath"`
@@ -36,9 +57,16 @@ type ParameterDoc struct {
 
 // ResponseDoc represents documentation for an endpoint's response
 type ResponseDoc struct {
-	Description string `json:"description,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	Example     string `json:"example,omitempty"`
+	Description string      `json:"description,omitempty"`
+	ContentType string      `json:"contentType,omitempty"`
+	Example     string      `json:"example,omitempty"`
+	Headers     []HeaderDoc `json:"headers,omitempty"` // Custom response headers
+}
+
+// StatusCodeDoc represents documentation for an HTTP-like status code
+type StatusCodeDoc struct {
+	Code        int    `json:"code"`
+	Description string `json:"description"`
 }
 
 // EndpointDoc represents documentation for a single endpoint
@@ -51,6 +79,17 @@ type EndpointDoc struct {
 	Response       *ResponseDoc   `json:"response,omitempty"`
 	Description    string         `json:"description,omitempty"`
 	WildcardType   string         `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
+}
+
+// standardStatusCodes returns the default status codes for all endpoints
+func standardStatusCodes() []StatusCodeDoc {
+	return []StatusCodeDoc{
+		{Code: 200, Description: "Success"},
+		{Code: 400, Description: "Validation error"},
+		{Code: 403, Description: "Authorization error"},
+		{Code: 404, Description: "Endpoint not found"},
+		{Code: 500, Description: "Server error"},
+	}
 }
 
 // registerDiscoveryEndpoint subscribes to the discovery subject.
@@ -72,12 +111,13 @@ func (ns *NatService) registerDiscoveryEndpoint() {
 	ns.discoverySubscription = sub
 }
 
-// handleDiscoveryRequest responds to discovery requests with endpoint documentation
+// handleDiscoveryRequest responds to discovery requests with basic service info
 func (ns *NatService) handleDiscoveryRequest(msg *nats.Msg) {
-	response := DiscoveryResponse{
-		ServiceName: ns.basePath,
-		BasePath:    ns.basePath,
-		Endpoints:   ns.buildEndpointDocs(),
+	response := ServiceInfo{
+		ServiceName:    ns.basePath,
+		SubjectPrefix:  ns.basePath,
+		Description:    ns.description,
+		ApiDocsSubject: ns.basePath + "." + ApiDocsSubjectSuffix,
 	}
 
 	jsonData, err := json.Marshal(response)
@@ -89,6 +129,58 @@ func (ns *NatService) handleDiscoveryRequest(msg *nats.Msg) {
 	if err := msg.Respond(jsonData); err != nil {
 		log.Printf("Error responding to discovery request: %v", err)
 	}
+}
+
+// registerApiDocsEndpoint subscribes to the API documentation subject.
+// If subscription fails (e.g., due to permissions), the service continues
+// to operate normally with a warning logged.
+func (ns *NatService) registerApiDocsEndpoint() {
+	subject := ns.basePath + "." + ApiDocsSubjectSuffix
+	sub, err := ns.nc.Subscribe(subject, ns.handleApiDocsRequest)
+	if err != nil {
+		log.Printf("WARNING: Unable to subscribe to API docs subject '%s': %v. Service will operate normally.", subject, err)
+		return
+	}
+
+	if !sub.IsValid() {
+		log.Printf("WARNING: API docs subscription to '%s' is invalid. Service will operate normally.", subject)
+		return
+	}
+
+	log.Printf("Registered API docs endpoint on subject: %s", subject)
+	ns.apiDocsSubscription = sub
+}
+
+// handleApiDocsRequest responds to API documentation requests with full endpoint documentation
+func (ns *NatService) handleApiDocsRequest(msg *nats.Msg) {
+	response := ApiDocsResponse{
+		ServiceName:   ns.basePath,
+		SubjectPrefix: ns.basePath,
+		Description:   ns.description,
+		StatusCodes:   standardStatusCodes(),
+		Endpoints:     ns.buildEndpointDocs(),
+	}
+
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Error marshaling API docs response: %v", err)
+		return
+	}
+
+	if err := msg.Respond(jsonData); err != nil {
+		log.Printf("Error responding to API docs request: %v", err)
+	}
+}
+
+// drainApiDocsSubscription drains the API docs subscription if it exists
+func (ns *NatService) drainApiDocsSubscription() error {
+	if ns.apiDocsSubscription != nil {
+		if err := ns.apiDocsSubscription.Drain(); err != nil {
+			log.Printf("Error draining API docs subscription: %v", err)
+			return err
+		}
+	}
+	return nil
 }
 
 // buildEndpointDocs creates documentation for all registered endpoints
