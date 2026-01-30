@@ -21,6 +21,9 @@ func main() {
 		log.Fatalf("Failed to create service: %v", err)
 	}
 
+	// Set service description (will be included in discovery responses)
+	service.SetDescription("Order management API - handles order CRUD operations and search")
+
 	// Register endpoints with documentation using batch registration
 	endpoints := []nats_service.EndpointRegistration{
 		{
@@ -38,6 +41,7 @@ func main() {
 			Parameters: []nats_service.ParameterDoc{
 				{Name: "orderId", Description: "Unique order identifier", Required: true, Example: "ORD-12345"},
 			},
+			// No Response doc - will get automatic status codes only
 			Handler: getOrderHandler,
 		},
 		{
@@ -61,6 +65,14 @@ func main() {
 			},
 			Parameters: []nats_service.ParameterDoc{
 				{Name: "userId", Description: "User identifier", Required: true, Example: "USR-98765"},
+			},
+			Response: &nats_service.ResponseDoc{
+				Description: "Paginated list of user orders",
+				ContentType: "application/json",
+				Headers: []nats_service.HeaderDoc{
+					{Name: "X-Total-Count", Description: "Total number of orders", Example: "42"},
+					{Name: "X-Next-Page-Token", Description: "Token for next page of results", Example: "eyJwYWdlIjoyfQ=="},
+				},
 			},
 			Handler: getUserOrdersHandler,
 		},

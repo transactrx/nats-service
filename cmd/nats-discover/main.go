@@ -27,6 +27,7 @@ type config struct {
 	timeout     time.Duration
 	format      string
 	showVersion bool
+	service     string // specific service to get API docs for
 	creds       string
 	nkey        string
 	jwt         string
@@ -56,17 +57,28 @@ func main() {
 	}
 	defer nc.Close()
 
-	// Discover services
-	responses, err := discoverServices(nc, cfg.timeout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error discovering services: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Output results
-	if err := outputResults(responses, cfg.format); err != nil {
-		fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
-		os.Exit(1)
+	if cfg.service != "" {
+		// Get API docs for a specific service
+		apiDocs, err := getServiceApiDocs(nc, cfg.service, cfg.timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting API docs for service '%s': %v\n", cfg.service, err)
+			os.Exit(1)
+		}
+		if err := outputApiDocs(apiDocs, cfg.format); err != nil {
+			fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// List all services (basic info only)
+		services, err := discoverServiceList(nc, cfg.timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error discovering services: %v\n", err)
+			os.Exit(1)
+		}
+		if err := outputServiceList(services, cfg.format); err != nil {
+			fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -79,6 +91,8 @@ func parseFlags() config {
 	flag.DurationVar(&cfg.timeout, "timeout", defaultTimeout, "Timeout for discovery requests")
 	flag.StringVar(&cfg.format, "format", "table", "Output format: table, json, yaml")
 	flag.BoolVar(&cfg.showVersion, "version", false, "Show version")
+	flag.StringVar(&cfg.service, "service", "", "Service name to get API docs for")
+	flag.StringVar(&cfg.service, "S", "", "Service name to get API docs for (shorthand)")
 	flag.StringVar(&cfg.creds, "creds", "", "Path to credentials file")
 	flag.StringVar(&cfg.nkey, "nkey", "", "Path to NKey file")
 	flag.StringVar(&cfg.jwt, "jwt", "", "JWT token for authentication")
@@ -90,9 +104,9 @@ func parseFlags() config {
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222\n")
-		fmt.Fprintf(os.Stderr, "  nats-discover --context mycontext --format json\n")
-		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 --timeout 5s --format yaml\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222                    # List all services\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 -S orders.api      # Show endpoints for orders.api\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 --service orders.api --format json\n")
 	}
 
 	flag.Parse()
@@ -252,11 +266,9 @@ func contextToOptions(ctx *natsContext) []nats.Option {
 	return opts
 }
 
-func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.DiscoveryResponse, error) {
-	// Use a map to deduplicate endpoints by full subject
-	// Multiple instances of the same service will respond, but we only need one of each endpoint
-	endpointMap := make(map[string]nats_service.EndpointDoc)
-	serviceMap := make(map[string]string) // serviceName -> basePath
+// discoverServiceList discovers all services and returns basic info only
+func discoverServiceList(nc *nats.Conn, timeout time.Duration) ([]nats_service.ServiceInfo, error) {
+	results := make(map[string]nats_service.ServiceInfo)
 	var mu sync.Mutex
 
 	// Create an inbox for receiving responses
@@ -264,20 +276,35 @@ func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.Disc
 
 	// Subscribe to the inbox
 	sub, err := nc.Subscribe(inbox, func(msg *nats.Msg) {
-		var resp nats_service.DiscoveryResponse
-		if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Try to parse as new ServiceInfo format
+		var serviceInfo nats_service.ServiceInfo
+		if err := json.Unmarshal(msg.Data, &serviceInfo); err != nil {
 			return // Skip malformed responses
 		}
-		mu.Lock()
-		// Track service info
-		serviceMap[resp.ServiceName] = resp.BasePath
-		// Deduplicate endpoints by full subject
-		for _, ep := range resp.Endpoints {
-			if _, exists := endpointMap[ep.FullSubject]; !exists {
-				endpointMap[ep.FullSubject] = ep
+
+		// Check if this is a legacy response with endpoints (old format)
+		var legacyResp nats_service.DiscoveryResponse
+		if err := json.Unmarshal(msg.Data, &legacyResp); err == nil && len(legacyResp.Endpoints) > 0 {
+			// Legacy response - extract basic info
+			serviceName := legacyResp.ServiceName
+			if _, exists := results[serviceName]; !exists {
+				results[serviceName] = nats_service.ServiceInfo{
+					ServiceName:   legacyResp.ServiceName,
+					SubjectPrefix: legacyResp.BasePath,
+				}
+			}
+			return
+		}
+
+		// New-style ServiceInfo response
+		if serviceInfo.ServiceName != "" {
+			if _, exists := results[serviceInfo.ServiceName]; !exists {
+				results[serviceInfo.ServiceName] = serviceInfo
 			}
 		}
-		mu.Unlock()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to subscribe to inbox: %w", err)
@@ -297,221 +324,297 @@ func discoverServices(nc *nats.Conn, timeout time.Duration) ([]nats_service.Disc
 	// Wait for responses
 	time.Sleep(timeout)
 
-	// Group endpoints by service name (extracted from fullSubject prefix)
-	serviceEndpoints := make(map[string][]nats_service.EndpointDoc)
-	for _, ep := range endpointMap {
-		// Extract service name from full subject (everything before the endpoint path)
-		serviceName := extractServiceName(ep.FullSubject, ep.Path)
-		serviceEndpoints[serviceName] = append(serviceEndpoints[serviceName], ep)
+	// Convert map to sorted slice
+	services := make([]nats_service.ServiceInfo, 0, len(results))
+	for _, svc := range results {
+		services = append(services, svc)
 	}
-
-	// Build response list
-	responses := make([]nats_service.DiscoveryResponse, 0, len(serviceEndpoints))
-	for serviceName, endpoints := range serviceEndpoints {
-		// Sort endpoints within each service
-		sort.Slice(endpoints, func(i, j int) bool {
-			return endpoints[i].FullSubject < endpoints[j].FullSubject
-		})
-
-		basePath := serviceMap[serviceName]
-		if basePath == "" {
-			basePath = serviceName
-		}
-
-		responses = append(responses, nats_service.DiscoveryResponse{
-			ServiceName: serviceName,
-			BasePath:    basePath,
-			Endpoints:   endpoints,
-		})
-	}
-
-	// Sort responses by service name
-	sort.Slice(responses, func(i, j int) bool {
-		return responses[i].ServiceName < responses[j].ServiceName
+	sort.Slice(services, func(i, j int) bool {
+		return services[i].ServiceName < services[j].ServiceName
 	})
 
-	return responses, nil
+	return services, nil
 }
 
-// extractServiceName extracts the service name from the full subject
-func extractServiceName(fullSubject, path string) string {
-	// fullSubject is like "orders.api.health" and path is "health"
-	// service name would be "orders.api"
-	if path == "" {
-		return fullSubject
+// getServiceApiDocs fetches API documentation for a specific service
+func getServiceApiDocs(nc *nats.Conn, serviceName string, timeout time.Duration) (*nats_service.ApiDocsResponse, error) {
+	// First, discover the service to get its API docs subject
+	services, err := discoverServiceList(nc, timeout)
+	if err != nil {
+		return nil, err
 	}
-	suffix := "." + path
-	if strings.HasSuffix(fullSubject, suffix) {
-		return strings.TrimSuffix(fullSubject, suffix)
+
+	// Find the service
+	var targetService *nats_service.ServiceInfo
+	for i := range services {
+		if services[i].ServiceName == serviceName {
+			targetService = &services[i]
+			break
+		}
 	}
-	return fullSubject
+
+	if targetService == nil {
+		return nil, fmt.Errorf("service '%s' not found", serviceName)
+	}
+
+	// If service has an API docs subject, fetch from there
+	if targetService.ApiDocsSubject != "" {
+		msg, err := nc.Request(targetService.ApiDocsSubject, nil, timeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get API docs: %w", err)
+		}
+
+		var apiDocs nats_service.ApiDocsResponse
+		if err := json.Unmarshal(msg.Data, &apiDocs); err != nil {
+			return nil, fmt.Errorf("failed to parse API docs response: %w", err)
+		}
+		return &apiDocs, nil
+	}
+
+	// Fallback: try legacy discovery to get endpoints
+	// This handles old services that return full DiscoveryResponse
+	return fetchLegacyApiDocs(nc, serviceName, timeout)
 }
 
-func outputResults(responses []nats_service.DiscoveryResponse, format string) error {
-	if len(responses) == 0 {
+// fetchLegacyApiDocs fetches endpoints from legacy services that include them in discovery
+func fetchLegacyApiDocs(nc *nats.Conn, serviceName string, timeout time.Duration) (*nats_service.ApiDocsResponse, error) {
+	var result *nats_service.ApiDocsResponse
+	var mu sync.Mutex
+
+	inbox := nc.NewInbox()
+
+	sub, err := nc.Subscribe(inbox, func(msg *nats.Msg) {
+		var legacyResp nats_service.DiscoveryResponse
+		if err := json.Unmarshal(msg.Data, &legacyResp); err != nil {
+			return
+		}
+
+		if legacyResp.ServiceName == serviceName && len(legacyResp.Endpoints) > 0 {
+			mu.Lock()
+			result = &nats_service.ApiDocsResponse{
+				ServiceName:   legacyResp.ServiceName,
+				SubjectPrefix: legacyResp.BasePath,
+				Endpoints:     legacyResp.Endpoints,
+			}
+			mu.Unlock()
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to inbox: %w", err)
+	}
+	defer sub.Unsubscribe()
+
+	if err := nc.PublishRequest(nats_service.DiscoverySubject, inbox, nil); err != nil {
+		return nil, fmt.Errorf("failed to publish discovery request: %w", err)
+	}
+
+	if err := nc.Flush(); err != nil {
+		return nil, fmt.Errorf("failed to flush: %w", err)
+	}
+
+	time.Sleep(timeout)
+
+	if result == nil {
+		return nil, fmt.Errorf("no API docs available for service '%s'", serviceName)
+	}
+
+	return result, nil
+}
+
+// outputServiceList outputs the list of discovered services
+func outputServiceList(services []nats_service.ServiceInfo, format string) error {
+	if len(services) == 0 {
 		fmt.Println("No services discovered")
 		return nil
 	}
 
 	switch strings.ToLower(format) {
 	case "json":
-		return outputJSON(responses)
+		data, err := json.MarshalIndent(services, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
 	case "yaml":
-		return outputYAML(responses)
+		for i, svc := range services {
+			if i > 0 {
+				fmt.Println("---")
+			}
+			fmt.Printf("serviceName: %s\n", svc.ServiceName)
+			fmt.Printf("subjectPrefix: %s\n", svc.SubjectPrefix)
+			if svc.Description != "" {
+				fmt.Printf("description: %s\n", svc.Description)
+			}
+			if svc.ApiDocsSubject != "" {
+				fmt.Printf("apiDocsSubject: %s\n", svc.ApiDocsSubject)
+			}
+		}
 	case "table":
-		return outputTable(responses)
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "SERVICE\tSUBJECT PREFIX\tDESCRIPTION\n")
+		fmt.Fprintf(w, "-------\t--------------\t-----------\n")
+		for _, svc := range services {
+			desc := svc.Description
+			if len(desc) > 50 {
+				desc = desc[:47] + "..."
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", svc.ServiceName, svc.SubjectPrefix, desc)
+		}
+		w.Flush()
 	default:
 		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
 	}
-}
-
-func outputJSON(responses []nats_service.DiscoveryResponse) error {
-	data, err := json.MarshalIndent(responses, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
 	return nil
 }
 
-func outputYAML(responses []nats_service.DiscoveryResponse) error {
-	// Simple YAML output without external dependency
-	for i, resp := range responses {
-		if i > 0 {
-			fmt.Println("---")
-		}
-		fmt.Printf("serviceName: %s\n", resp.ServiceName)
-		fmt.Printf("basePath: %s\n", resp.BasePath)
-		fmt.Println("endpoints:")
-		for _, ep := range resp.Endpoints {
-			fmt.Printf("  - path: %s\n", ep.Path)
-			fmt.Printf("    fullSubject: %s\n", ep.FullSubject)
-			if ep.ExampleSubject != "" {
-				fmt.Printf("    exampleSubject: %s\n", ep.ExampleSubject)
-			}
-			if len(ep.Parameters) > 0 {
-				fmt.Println("    parameters:")
-				for _, p := range ep.Parameters {
-					fmt.Printf("      - name: %s\n", p.Name)
-					if p.Description != "" {
-						fmt.Printf("        description: %s\n", p.Description)
-					}
-					if p.Required {
-						fmt.Printf("        required: true\n")
-					}
-					if p.Example != "" {
-						fmt.Printf("        example: %s\n", p.Example)
-					}
-				}
-			}
-			if len(ep.Headers) > 0 {
-				fmt.Println("    headers:")
-				for _, h := range ep.Headers {
-					fmt.Printf("      - name: %s\n", h.Name)
-					if h.Description != "" {
-						fmt.Printf("        description: %s\n", h.Description)
-					}
-					if h.Required {
-						fmt.Printf("        required: true\n")
-					}
-					if h.Example != "" {
-						fmt.Printf("        example: %s\n", h.Example)
-					}
-				}
-			}
-			if ep.Response != nil {
-				fmt.Println("    response:")
-				if ep.Response.Description != "" {
-					fmt.Printf("      description: %s\n", ep.Response.Description)
-				}
-				if ep.Response.ContentType != "" {
-					fmt.Printf("      contentType: %s\n", ep.Response.ContentType)
-				}
-				if ep.Response.Example != "" {
-					fmt.Printf("      example: %s\n", ep.Response.Example)
-				}
-			}
-			if ep.Description != "" {
-				fmt.Printf("    description: %s\n", ep.Description)
-			}
-			if ep.WildcardType != "" {
-				fmt.Printf("    wildcardType: %s\n", ep.WildcardType)
-			}
-		}
+// outputApiDocs outputs the API documentation for a service
+func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
+	if apiDocs == nil {
+		fmt.Println("No API documentation available")
+		return nil
 	}
-	return nil
-}
 
-func outputTable(responses []nats_service.DiscoveryResponse) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	switch strings.ToLower(format) {
+	case "json":
+		data, err := json.MarshalIndent(apiDocs, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+	case "yaml":
+		fmt.Printf("serviceName: %s\n", apiDocs.ServiceName)
+		fmt.Printf("subjectPrefix: %s\n", apiDocs.SubjectPrefix)
+		if apiDocs.Description != "" {
+			fmt.Printf("description: %s\n", apiDocs.Description)
+		}
+		if len(apiDocs.StatusCodes) > 0 {
+			fmt.Println("statusCodes:")
+			for _, sc := range apiDocs.StatusCodes {
+				fmt.Printf("  - code: %d\n", sc.Code)
+				fmt.Printf("    description: %s\n", sc.Description)
+			}
+		}
+		if len(apiDocs.Endpoints) > 0 {
+			fmt.Println("endpoints:")
+			for _, ep := range apiDocs.Endpoints {
+				fmt.Printf("  - path: %s\n", ep.Path)
+				fmt.Printf("    fullSubject: %s\n", ep.FullSubject)
+				if ep.ExampleSubject != "" {
+					fmt.Printf("    exampleSubject: %s\n", ep.ExampleSubject)
+				}
+				if ep.Description != "" {
+					fmt.Printf("    description: %s\n", ep.Description)
+				}
+				if len(ep.Parameters) > 0 {
+					fmt.Println("    parameters:")
+					for _, p := range ep.Parameters {
+						fmt.Printf("      - name: %s\n", p.Name)
+						if p.Description != "" {
+							fmt.Printf("        description: %s\n", p.Description)
+						}
+						if p.Required {
+							fmt.Printf("        required: true\n")
+						}
+						if p.Example != "" {
+							fmt.Printf("        example: %s\n", p.Example)
+						}
+					}
+				}
+				if len(ep.Headers) > 0 {
+					fmt.Println("    headers:")
+					for _, h := range ep.Headers {
+						fmt.Printf("      - name: %s\n", h.Name)
+						if h.Description != "" {
+							fmt.Printf("        description: %s\n", h.Description)
+						}
+						if h.Required {
+							fmt.Printf("        required: true\n")
+						}
+						if h.Example != "" {
+							fmt.Printf("        example: %s\n", h.Example)
+						}
+					}
+				}
+				if ep.Response != nil {
+					fmt.Println("    response:")
+					if ep.Response.Description != "" {
+						fmt.Printf("      description: %s\n", ep.Response.Description)
+					}
+					if ep.Response.ContentType != "" {
+						fmt.Printf("      contentType: %s\n", ep.Response.ContentType)
+					}
+					if ep.Response.Example != "" {
+						fmt.Printf("      example: %s\n", ep.Response.Example)
+					}
+					if len(ep.Response.Headers) > 0 {
+						fmt.Println("      headers:")
+						for _, h := range ep.Response.Headers {
+							fmt.Printf("        - name: %s\n", h.Name)
+							if h.Description != "" {
+								fmt.Printf("          description: %s\n", h.Description)
+							}
+							if h.Example != "" {
+								fmt.Printf("          example: %s\n", h.Example)
+							}
+						}
+					}
+				}
+				if ep.WildcardType != "" {
+					fmt.Printf("    wildcardType: %s\n", ep.WildcardType)
+				}
+			}
+		}
+	case "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Printf("Service: %s\n", apiDocs.ServiceName)
+		if apiDocs.Description != "" {
+			fmt.Printf("Description: %s\n", apiDocs.Description)
+		}
+		fmt.Println()
+		fmt.Fprintf(w, "SUBJECT PATTERN\tEXAMPLE\tDESCRIPTION\n")
+		fmt.Fprintf(w, "---------------\t-------\t-----------\n")
 
-	fmt.Fprintf(w, "SERVICE\tSUBJECT PATTERN\tEXAMPLE\tDESCRIPTION\n")
-	fmt.Fprintf(w, "-------\t---------------\t-------\t-----------\n")
-
-	for _, resp := range responses {
-		for _, ep := range resp.Endpoints {
+		for _, ep := range apiDocs.Endpoints {
 			example := ep.ExampleSubject
 			if example == "" {
 				example = "-"
 			}
-
 			desc := ep.Description
 			if len(desc) > 40 {
 				desc = desc[:37] + "..."
 			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", ep.FullSubject, example, desc)
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, example, desc)
-
-			// Show parameters, headers, and response on separate lines if present
-			if len(ep.Parameters) > 0 || len(ep.Headers) > 0 || ep.Response != nil {
-				// Parameters
-				if len(ep.Parameters) > 0 {
-					paramDetails := make([]string, 0, len(ep.Parameters))
-					for _, p := range ep.Parameters {
-						detail := p.Name
-						if p.Required {
-							detail += "*"
-						}
-						if p.Description != "" {
-							detail += " (" + p.Description + ")"
-						}
-						paramDetails = append(paramDetails, detail)
+			// Show parameters and headers
+			if len(ep.Parameters) > 0 {
+				paramDetails := make([]string, 0, len(ep.Parameters))
+				for _, p := range ep.Parameters {
+					detail := p.Name
+					if p.Required {
+						detail += "*"
 					}
-					fmt.Fprintf(w, "\t  Params: %s\t\t\n", strings.Join(paramDetails, ", "))
+					if p.Description != "" {
+						detail += " (" + p.Description + ")"
+					}
+					paramDetails = append(paramDetails, detail)
 				}
-
-				// Headers
-				if len(ep.Headers) > 0 {
-					headerDetails := make([]string, 0, len(ep.Headers))
-					for _, h := range ep.Headers {
-						detail := h.Name
-						if h.Required {
-							detail += "*"
-						}
-						headerDetails = append(headerDetails, detail)
+				fmt.Fprintf(w, "  Params: %s\t\t\n", strings.Join(paramDetails, ", "))
+			}
+			if len(ep.Headers) > 0 {
+				headerDetails := make([]string, 0, len(ep.Headers))
+				for _, h := range ep.Headers {
+					detail := h.Name
+					if h.Required {
+						detail += "*"
 					}
-					fmt.Fprintf(w, "\t  Headers: %s\t\t\n", strings.Join(headerDetails, ", "))
+					headerDetails = append(headerDetails, detail)
 				}
-
-				// Response
-				if ep.Response != nil {
-					responseDetail := ""
-					if ep.Response.ContentType != "" {
-						responseDetail = ep.Response.ContentType
-					}
-					if ep.Response.Description != "" {
-						if responseDetail != "" {
-							responseDetail += " - "
-						}
-						responseDetail += ep.Response.Description
-					}
-					if responseDetail != "" {
-						fmt.Fprintf(w, "\t  Response: %s\t\t\n", responseDetail)
-					}
-				}
+				fmt.Fprintf(w, "  Headers: %s\t\t\n", strings.Join(headerDetails, ", "))
 			}
 		}
+		w.Flush()
+	default:
+		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
 	}
-
-	return w.Flush()
+	return nil
 }
