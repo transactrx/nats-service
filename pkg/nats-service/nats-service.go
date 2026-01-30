@@ -57,6 +57,7 @@ type NatsEndpoint struct {
 	description      string
 	headers          []HeaderDoc
 	parameters       []ParameterDoc
+	response         *ResponseDoc
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -193,7 +194,7 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 // The description, headers, and parameters are included in discovery responses
 // to help clients understand the endpoint's purpose and requirements.
 // Pass nil for headers or params if not needed.
-func (ns *NatService) AddEndpointWithDoc(path string, description string, headers []HeaderDoc, params []ParameterDoc, endPoint NatsEndpointFunc) error {
+func (ns *NatService) AddEndpointWithDoc(path string, description string, headers []HeaderDoc, params []ParameterDoc, response *ResponseDoc, endPoint NatsEndpointFunc) error {
 	err := ns.AddEndpoint(path, endPoint)
 	if err != nil {
 		return err
@@ -204,6 +205,7 @@ func (ns *NatService) AddEndpointWithDoc(path string, description string, header
 	lastEp.description = description
 	lastEp.headers = headers
 	lastEp.parameters = params
+	lastEp.response = response
 	return nil
 }
 
@@ -213,6 +215,7 @@ type EndpointRegistration struct {
 	Description string
 	Headers     []HeaderDoc
 	Parameters  []ParameterDoc
+	Response    *ResponseDoc
 	Handler     NatsEndpointFunc
 }
 
@@ -230,6 +233,7 @@ func (ns *NatService) AddEndpointWithDocs(endpoints []EndpointRegistration) erro
 		lastEp.description = ep.Description
 		lastEp.headers = ep.Headers
 		lastEp.parameters = ep.Parameters
+		lastEp.response = ep.Response
 	}
 	return nil
 }

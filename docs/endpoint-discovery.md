@@ -13,6 +13,7 @@ When a service starts, it automatically registers itself on the `_discovery.all`
 - **Deduplication**: Multiple instances of the same service are deduplicated by endpoint full subject
 - **Header Documentation**: Document required and optional headers for each endpoint
 - **Parameter Extraction**: Path parameters (`:param` syntax) are automatically extracted and displayed
+- **Response Documentation**: Document what each endpoint returns (content type, description, example)
 - **Wildcard Detection**: Single (`*`) and multi (`>`) wildcards are detected and labeled
 
 ## Documenting Your Endpoints
@@ -27,9 +28,9 @@ service.AddEndpoint("health", healthHandler)
 
 ```go
 // Simple endpoint with just a description
-service.AddEndpointWithDoc("health", "Health check endpoint", nil, nil, healthHandler)
+service.AddEndpointWithDoc("health", "Health check endpoint", nil, nil, nil, healthHandler)
 
-// Endpoint with headers and parameter documentation
+// Endpoint with headers, parameter, and response documentation
 service.AddEndpointWithDoc(
     "orders.:orderId",
     "Get order by ID",
@@ -38,6 +39,11 @@ service.AddEndpointWithDoc(
     },
     []nats_service.ParameterDoc{
         {Name: "orderId", Description: "Unique order identifier", Required: true, Example: "ORD-12345"},
+    },
+    &nats_service.ResponseDoc{
+        Description: "Order details in JSON format",
+        ContentType: "application/json",
+        Example:     `{"id": "ORD-12345", "status": "shipped"}`,
     },
     getOrderHandler,
 )
@@ -50,6 +56,7 @@ endpoints := []nats_service.EndpointRegistration{
     {
         Path:        "health",
         Description: "Health check endpoint - returns service status",
+        Response:    &nats_service.ResponseDoc{Description: "OK if healthy", ContentType: "text/plain"},
         Handler:     healthHandler,
     },
     {
@@ -75,6 +82,11 @@ endpoints := []nats_service.EndpointRegistration{
                 Required:    true,
                 Example:     "ORD-12345",
             },
+        },
+        Response: &nats_service.ResponseDoc{
+            Description: "Order object with status and items",
+            ContentType: "application/json",
+            Example:     `{"id": "ORD-12345", "status": "shipped", "items": []}`,
         },
         Handler: getOrderHandler,
     },
@@ -107,6 +119,14 @@ err := service.AddEndpointWithDocs(endpoints)
 | Example     | string | Example value for documentation          |
 
 **Note:** Parameter names are automatically discovered from the endpoint path (e.g., `:orderId` extracts "orderId"). User-provided `ParameterDoc` entries are merged with auto-discovered names to add descriptions and examples.
+
+### ResponseDoc Fields
+
+| Field       | Type   | Description                              |
+|-------------|--------|------------------------------------------|
+| Description | string | What the endpoint returns                |
+| ContentType | string | MIME type (e.g., "application/json")     |
+| Example     | string | Example response payload                 |
 
 ## Using the nats-discover CLI
 
@@ -174,18 +194,22 @@ nats-discover -s nats://localhost:4222 --jwt "eyJ..." --seed "SUAM..."
 SERVICE     SUBJECT PATTERN                       EXAMPLE                              DESCRIPTION
 -------     ---------------                       -------                              -----------
 orders.api  orders.api.health                     -                                    Health check endpoint
+              Response: text/plain - OK if healthy
 orders.api  orders.api.orders.:orderId            orders.api.orders.ORD-12345          Get order by ID
               Params: orderId* (Unique order identifier)
               Headers: Authorization*, X-Request-ID
+              Response: application/json - Order object with status and items
 orders.api  orders.api.users.:userId.orders       orders.api.users.USR-98765.orders    Get all orders for a user
               Params: userId* (User identifier)
               Headers: Authorization*
+              Response: application/json - List of orders
 ```
 
 - **SUBJECT PATTERN**: The NATS subject with `:param` placeholders
 - **EXAMPLE**: A concrete example with parameters filled in (from `ParameterDoc.Example`)
 - Required parameters and headers are marked with `*`
 - Parameters without examples show `{paramName}` placeholder
+- Response shows content type and description when documented
 
 #### JSON
 
@@ -215,6 +239,11 @@ orders.api  orders.api.users.:userId.orders       orders.api.users.USR-98765.ord
             "example": "Bearer eyJhbG..."
           }
         ],
+        "response": {
+          "description": "Order object with status and items",
+          "contentType": "application/json",
+          "example": "{\"id\": \"ORD-12345\", \"status\": \"shipped\"}"
+        },
         "description": "Get order by ID"
       }
     ]
@@ -241,6 +270,10 @@ endpoints:
         description: Bearer token for authentication
         required: true
         example: Bearer eyJhbG...
+    response:
+      description: Order object with status and items
+      contentType: application/json
+      example: '{"id": "ORD-12345", "status": "shipped"}'
     description: Get order by ID
 ```
 
@@ -262,7 +295,11 @@ Services respond with a JSON payload:
     {
       "path": "health",
       "fullSubject": "orders.api.health",
-      "description": "Health check endpoint"
+      "description": "Health check endpoint",
+      "response": {
+        "description": "OK if healthy",
+        "contentType": "text/plain"
+      }
     },
     {
       "path": "orders.:orderId",
@@ -274,6 +311,11 @@ Services respond with a JSON payload:
       "headers": [
         {"name": "Authorization", "required": true}
       ],
+      "response": {
+        "description": "Order object",
+        "contentType": "application/json",
+        "example": "{\"id\": \"ORD-12345\", \"status\": \"shipped\"}"
+      },
       "description": "Get order by ID"
     }
   ]
