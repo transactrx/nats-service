@@ -56,6 +56,7 @@ type NatsEndpoint struct {
 	pathHasWildcards bool
 	description      string
 	headers          []HeaderDoc
+	parameters       []ParameterDoc
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -188,17 +189,21 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 	return nil
 }
 
-// AddEndpointWithDoc registers an endpoint with a description for discovery.
-// The description is included in discovery responses to help clients understand
-// the endpoint's purpose.
-func (ns *NatService) AddEndpointWithDoc(path string, description string, endPoint NatsEndpointFunc) error {
+// AddEndpointWithDoc registers an endpoint with documentation for discovery.
+// The description, headers, and parameters are included in discovery responses
+// to help clients understand the endpoint's purpose and requirements.
+// Pass nil for headers or params if not needed.
+func (ns *NatService) AddEndpointWithDoc(path string, description string, headers []HeaderDoc, params []ParameterDoc, endPoint NatsEndpointFunc) error {
 	err := ns.AddEndpoint(path, endPoint)
 	if err != nil {
 		return err
 	}
 
-	// Set description on the last added endpoint
-	ns.endPoints[len(ns.endPoints)-1].description = description
+	// Set documentation on the last added endpoint
+	lastEp := ns.endPoints[len(ns.endPoints)-1]
+	lastEp.description = description
+	lastEp.headers = headers
+	lastEp.parameters = params
 	return nil
 }
 
@@ -207,10 +212,11 @@ type EndpointRegistration struct {
 	Path        string
 	Description string
 	Headers     []HeaderDoc
+	Parameters  []ParameterDoc
 	Handler     NatsEndpointFunc
 }
 
-// AddEndpointWithDocs registers multiple endpoints at once, each with its own description.
+// AddEndpointWithDocs registers multiple endpoints at once, each with its own documentation.
 // This is useful for batch registration of documented endpoints.
 // If any endpoint fails to register, the function returns immediately with the error
 // and any previously registered endpoints in this batch remain registered.
@@ -219,10 +225,11 @@ func (ns *NatService) AddEndpointWithDocs(endpoints []EndpointRegistration) erro
 		if err := ns.AddEndpoint(ep.Path, ep.Handler); err != nil {
 			return fmt.Errorf("failed to register endpoint '%s': %w", ep.Path, err)
 		}
-		// Set description and headers on the last added endpoint
+		// Set documentation on the last added endpoint
 		lastEp := ns.endPoints[len(ns.endPoints)-1]
 		lastEp.description = ep.Description
 		lastEp.headers = ep.Headers
+		lastEp.parameters = ep.Parameters
 	}
 	return nil
 }

@@ -35,6 +35,9 @@ func main() {
 				{Name: "Authorization", Description: "Bearer token for authentication", Required: true, Example: "Bearer eyJhbG..."},
 				{Name: "X-Request-ID", Description: "Unique request identifier for tracing", Required: false},
 			},
+			Parameters: []nats_service.ParameterDoc{
+				{Name: "orderId", Description: "Unique order identifier", Required: true, Example: "ORD-12345"},
+			},
 			Handler: getOrderHandler,
 		},
 		{
@@ -42,6 +45,9 @@ func main() {
 			Description: "Get all items for an order",
 			Headers: []nats_service.HeaderDoc{
 				{Name: "Authorization", Description: "Bearer token for authentication", Required: true},
+			},
+			Parameters: []nats_service.ParameterDoc{
+				{Name: "orderId", Description: "Unique order identifier", Required: true, Example: "ORD-12345"},
 			},
 			Handler: getOrderItemsHandler,
 		},
@@ -52,6 +58,9 @@ func main() {
 				{Name: "Authorization", Description: "Bearer token for authentication", Required: true},
 				{Name: "X-Page-Size", Description: "Number of results per page", Required: false, Example: "20"},
 				{Name: "X-Page-Token", Description: "Pagination token for next page", Required: false},
+			},
+			Parameters: []nats_service.ParameterDoc{
+				{Name: "userId", Description: "User identifier", Required: true, Example: "USR-98765"},
 			},
 			Handler: getUserOrdersHandler,
 		},

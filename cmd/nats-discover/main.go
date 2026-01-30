@@ -370,8 +370,23 @@ func outputYAML(responses []nats_service.DiscoveryResponse) error {
 		for _, ep := range resp.Endpoints {
 			fmt.Printf("  - path: %s\n", ep.Path)
 			fmt.Printf("    fullSubject: %s\n", ep.FullSubject)
+			if ep.ExampleSubject != "" {
+				fmt.Printf("    exampleSubject: %s\n", ep.ExampleSubject)
+			}
 			if len(ep.Parameters) > 0 {
-				fmt.Printf("    parameters: [%s]\n", strings.Join(ep.Parameters, ", "))
+				fmt.Println("    parameters:")
+				for _, p := range ep.Parameters {
+					fmt.Printf("      - name: %s\n", p.Name)
+					if p.Description != "" {
+						fmt.Printf("        description: %s\n", p.Description)
+					}
+					if p.Required {
+						fmt.Printf("        required: true\n")
+					}
+					if p.Example != "" {
+						fmt.Printf("        example: %s\n", p.Example)
+					}
+				}
 			}
 			if len(ep.Headers) > 0 {
 				fmt.Println("    headers:")
@@ -402,33 +417,14 @@ func outputYAML(responses []nats_service.DiscoveryResponse) error {
 func outputTable(responses []nats_service.DiscoveryResponse) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintf(w, "SERVICE\tENDPOINT\tPARAMETERS\tHEADERS\tDESCRIPTION\n")
-	fmt.Fprintf(w, "-------\t--------\t----------\t-------\t-----------\n")
+	fmt.Fprintf(w, "SERVICE\tSUBJECT PATTERN\tEXAMPLE\tDESCRIPTION\n")
+	fmt.Fprintf(w, "-------\t---------------\t-------\t-----------\n")
 
 	for _, resp := range responses {
 		for _, ep := range resp.Endpoints {
-			params := ""
-			if len(ep.Parameters) > 0 {
-				params = strings.Join(ep.Parameters, ", ")
-			}
-			if ep.WildcardType != "" {
-				if params != "" {
-					params += " "
-				}
-				params += fmt.Sprintf("[%s wildcard]", ep.WildcardType)
-			}
-
-			headers := ""
-			if len(ep.Headers) > 0 {
-				headerNames := make([]string, 0, len(ep.Headers))
-				for _, h := range ep.Headers {
-					name := h.Name
-					if h.Required {
-						name += "*"
-					}
-					headerNames = append(headerNames, name)
-				}
-				headers = strings.Join(headerNames, ", ")
+			example := ep.ExampleSubject
+			if example == "" {
+				example = "-"
 			}
 
 			desc := ep.Description
@@ -436,7 +432,39 @@ func outputTable(responses []nats_service.DiscoveryResponse) error {
 				desc = desc[:37] + "..."
 			}
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, params, headers, desc)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", resp.ServiceName, ep.FullSubject, example, desc)
+
+			// Show parameters and headers on separate lines if present
+			if len(ep.Parameters) > 0 || len(ep.Headers) > 0 {
+				// Parameters
+				if len(ep.Parameters) > 0 {
+					paramDetails := make([]string, 0, len(ep.Parameters))
+					for _, p := range ep.Parameters {
+						detail := p.Name
+						if p.Required {
+							detail += "*"
+						}
+						if p.Description != "" {
+							detail += " (" + p.Description + ")"
+						}
+						paramDetails = append(paramDetails, detail)
+					}
+					fmt.Fprintf(w, "\t  Params: %s\t\t\n", strings.Join(paramDetails, ", "))
+				}
+
+				// Headers
+				if len(ep.Headers) > 0 {
+					headerDetails := make([]string, 0, len(ep.Headers))
+					for _, h := range ep.Headers {
+						detail := h.Name
+						if h.Required {
+							detail += "*"
+						}
+						headerDetails = append(headerDetails, detail)
+					}
+					fmt.Fprintf(w, "\t  Headers: %s\t\t\n", strings.Join(headerDetails, ", "))
+				}
+			}
 		}
 	}
 

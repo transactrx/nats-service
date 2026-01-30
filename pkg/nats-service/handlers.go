@@ -127,12 +127,11 @@ func GetCompressedResponse(msg *NatsMessage) *NatsServiceError {
 			InternalErr:   fmt.Sprintf("error reading compressed data: %v", errRead),
 		}
 	}
-	
+
 	if len(compressedData) == 0 && len(dataToCompress) > 0 {
 		msg.Logger.Printf("Warning: Compressed data is empty, but original data was not. Original size: %d", len(dataToCompress))
-        // This might indicate an issue if not expected, but not necessarily an error for all cases (e.g. if original data was empty and compressible)
+		// This might indicate an issue if not expected, but not necessarily an error for all cases (e.g. if original data was empty and compressible)
 	}
-
 
 	msg.ResponseBody = compressedData
 	// msg.Data = nil // Request data should remain untouched. Response is in ResponseBody.
