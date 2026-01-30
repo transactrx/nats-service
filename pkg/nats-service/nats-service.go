@@ -25,10 +25,12 @@ type NatService struct {
 	chunkedSubscription         *nats.Subscription
 	chunkedReceiverSubscription *nats.Subscription
 	discoverySubscription       *nats.Subscription
+	apiDocsSubscription         *nats.Subscription
 	chunkCache                  *ttlcache.Cache[string, [][]byte]
 	endPoints                   []*NatsEndpoint
 	basePath                    string
 	queueName                   string
+	description                 string
 	maxRespSizeToCompress       int
 	maxRespSizeToChunk          int
 	debug                       bool
@@ -78,6 +80,12 @@ func New(basePath string) (*NatService, error) {
 
 func (ns *NatService) GetNatsService() *nats.Conn {
 	return ns.nc
+}
+
+// SetDescription sets a description for the service that will be included in discovery responses.
+// This should be called before Start() to ensure the description is available during discovery.
+func (ns *NatService) SetDescription(description string) {
+	ns.description = description
 }
 
 func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
@@ -290,6 +298,9 @@ func (ns *NatService) Start() error {
 	// Register discovery endpoint (non-blocking, graceful degradation on failure)
 	ns.registerDiscoveryEndpoint()
 
+	// Register API docs endpoint (non-blocking, graceful degradation on failure)
+	ns.registerApiDocsEndpoint()
+
 	return nil
 }
 
@@ -489,6 +500,9 @@ func handleEndpointInternalException(msg *nats.Msg, err error) {
 func (ns *NatService) Shutdown() error {
 	// Drain discovery subscription first (non-blocking if not registered)
 	ns.drainDiscoverySubscription()
+
+	// Drain API docs subscription (non-blocking if not registered)
+	ns.drainApiDocsSubscription()
 
 	return ns.subscription.Drain()
 }
