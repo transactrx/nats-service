@@ -1,0 +1,88 @@
+{
+  "github_project": {
+    "project_id": "PVT_kwDOADYRp84BN0_M",
+    "project_number": 21,
+    "project_url": "https://github.com/orgs/transactrx/projects/21",
+    "owner": "transactrx"
+  },
+  "status_field": {
+    "field_id": "PVTSSF_lADOADYRp84BN0_Mzg8tbeU",
+    "options": {
+      "todo": "899cef8b",
+      "in_progress": "d51c14ec",
+      "test": "96f9a0d9",
+      "done": "48500f82"
+    }
+  },
+  "items": {
+    "endpoint_doc_struct": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-s8",
+      "title": "Add EndpointDoc struct for endpoint metadata",
+      "order": 1
+    },
+    "add_endpoint_with_doc": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-uM",
+      "title": "Add AddEndpointWithDoc() registration function",
+      "order": 3
+    },
+    "add_endpoint_with_docs": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-v8",
+      "title": "Add AddEndpointWithDocs() registration function",
+      "order": 4
+    },
+    "parameter_extraction": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-xI",
+      "title": "Implement automatic parameter extraction from path patterns",
+      "order": 2
+    },
+    "discovery_responder": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-yE",
+      "title": "Implement discovery responder subscription",
+      "order": 5
+    },
+    "graceful_degradation": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-2Q",
+      "title": "Implement graceful degradation for discovery subscription",
+      "order": 6
+    },
+    "cli_structure": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-3s",
+      "title": "Create nats-discover CLI tool structure",
+      "order": 7
+    },
+    "nats_context_loading": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-4o",
+      "title": "Implement NATS context loading (compatible with nats CLI)",
+      "order": 9
+    },
+    "discovery_broadcast": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-6Q",
+      "title": "Implement discovery request broadcast and response collection",
+      "order": 10
+    },
+    "output_formatters": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-7k",
+      "title": "Implement output formatters (JSON, YAML, table)",
+      "order": 11
+    },
+    "cli_flags": {
+      "id": "PVTI_lADOADYRp84BN0_Mzgkg-8U",
+      "title": "Implement CLI flags and configuration",
+      "order": 8
+    }
+  },
+  "branch": "feature/endpoint-discovery",
+  "implementation_order": [
+    "endpoint_doc_struct",
+    "parameter_extraction",
+    "add_endpoint_with_doc",
+    "add_endpoint_with_docs",
+    "discovery_responder",
+    "graceful_degradation",
+    "cli_structure",
+    "cli_flags",
+    "nats_context_loading",
+    "discovery_broadcast",
+    "output_formatters"
+  ]
+}

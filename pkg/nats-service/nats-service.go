@@ -24,6 +24,7 @@ type NatService struct {
 	subscription                *nats.Subscription
 	chunkedSubscription         *nats.Subscription
 	chunkedReceiverSubscription *nats.Subscription
+	discoverySubscription       *nats.Subscription
 	chunkCache                  *ttlcache.Cache[string, [][]byte]
 	endPoints                   []*NatsEndpoint
 	basePath                    string
@@ -53,6 +54,7 @@ type NatsEndpoint struct {
 	matchRegex       *regexp2.Regexp
 	pathSeparator    string
 	pathHasWildcards bool
+	description      string
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -185,6 +187,40 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 	return nil
 }
 
+// AddEndpointWithDoc registers an endpoint with a description for discovery.
+// The description is included in discovery responses to help clients understand
+// the endpoint's purpose.
+func (ns *NatService) AddEndpointWithDoc(path string, description string, endPoint NatsEndpointFunc) error {
+	err := ns.AddEndpoint(path, endPoint)
+	if err != nil {
+		return err
+	}
+
+	// Set description on the last added endpoint
+	ns.endPoints[len(ns.endPoints)-1].description = description
+	return nil
+}
+
+// EndpointRegistration represents a single endpoint registration with its documentation.
+type EndpointRegistration struct {
+	Path        string
+	Description string
+	Handler     NatsEndpointFunc
+}
+
+// AddEndpointWithDocs registers multiple endpoints at once, each with its own description.
+// This is useful for batch registration of documented endpoints.
+// If any endpoint fails to register, the function returns immediately with the error
+// and any previously registered endpoints in this batch remain registered.
+func (ns *NatService) AddEndpointWithDocs(endpoints []EndpointRegistration) error {
+	for _, ep := range endpoints {
+		if err := ns.AddEndpointWithDoc(ep.Path, ep.Description, ep.Handler); err != nil {
+			return fmt.Errorf("failed to register endpoint '%s': %w", ep.Path, err)
+		}
+	}
+	return nil
+}
+
 func (ns *NatService) Start() error {
 
 	if len(ns.endPoints) == 0 {
@@ -230,8 +266,14 @@ func (ns *NatService) Start() error {
 	ns.subscription = subscribe
 
 	err = ns.startChunkResponder()
+	if err != nil {
+		return err
+	}
 
-	return err
+	// Register discovery endpoint (non-blocking, graceful degradation on failure)
+	ns.registerDiscoveryEndpoint()
+
+	return nil
 }
 
 func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) {
@@ -428,6 +470,9 @@ func handleEndpointInternalException(msg *nats.Msg, err error) {
 }
 
 func (ns *NatService) Shutdown() error {
+	// Drain discovery subscription first (non-blocking if not registered)
+	ns.drainDiscoverySubscription()
+
 	return ns.subscription.Drain()
 }
 

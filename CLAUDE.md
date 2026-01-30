@@ -87,12 +87,20 @@ cd cmd/requester-example && NATS_URL=nats://localhost:4222 go run main.go
 - Response compression at service when >2KB
 - Automatic decompression by recipient
 
+**Endpoint Discovery**: Services automatically register for discovery
+- Discovery subject: `_discovery.all`
+- Returns service name, base path, and all registered endpoints
+- Includes parameter names, descriptions, and wildcard types
+- Graceful degradation if subscription fails (service continues normally)
+
 ### Important Implementation Details
 
-**Endpoint Registration**: Use `AddEndpoint()` before `Start()`
+**Endpoint Registration**: Use `AddEndpoint()` or `AddEndpointWithDoc()` before `Start()`
 - Endpoints are matched by regex against incoming NATS subjects
 - Path separator can be `.` or `/` (detected automatically)
 - Parameters extracted via regex named groups
+- Use `AddEndpointWithDoc()` to include descriptions for discovery
+- Use `AddEndpointWithDocs()` for batch registration with descriptions
 
 **Error Handling**: Return `*NatsServiceError` from handlers
 - Status codes: 400 (validation), 403 (auth), 404 (not found), 500 (server error)
@@ -161,23 +169,67 @@ func MyHandler(msg *natsservice.NatsMessage) *natsservice.NatsServiceError {
 ```go
 // Validation error (400)
 if invalid {
-    return natsservice.NewValidationError("invalid input", 4001, err)
+    err := natsservice.NewValidationError("invalid input", 4001, err)
+    return &err
 }
 
 // Server error (500)
 if err != nil {
-    return natsservice.NewServerError("processing failed", 5001, err)
+    svcErr := natsservice.NewServerError("processing failed", 5001, err)
+    return &svcErr
 }
 
 // Authorization error (403)
 if unauthorized {
-    return natsservice.NewAuthorizationError("access denied", 4031, err)
+    err := natsservice.NewAuthorizationError("access denied", 4031, err)
+    return &err
 }
+
+// Forwarded message (302) - indicates message was forwarded, no response needed
+forwardErr := natsservice.NewForwardedError("forwarded to another service")
+return &forwardErr
+```
+
+### Endpoint Discovery CLI
+
+The `nats-discover` CLI tool discovers all services running the nats-service framework:
+
+```bash
+# Build the CLI
+go build -o nats-discover ./cmd/nats-discover
+
+# Discover services (table format)
+nats-discover -s nats://localhost:4222
+
+# JSON output
+nats-discover -s nats://localhost:4222 --format json
+
+# YAML output
+nats-discover -s nats://localhost:4222 --format yaml
+
+# With NATS CLI context (reads from ~/.config/nats/context/)
+nats-discover --context mycontext
+
+# Custom timeout
+nats-discover -s nats://localhost:4222 --timeout 5s
+```
+
+### Registering Endpoints with Documentation
+```go
+// Single endpoint with description
+err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", userHandler)
+
+// Batch registration
+endpoints := []nats_service.EndpointRegistration{
+    {Path: "ping", Description: "Health check", Handler: pingHandler},
+    {Path: "users.:userId", Description: "Get user by ID", Handler: userHandler},
+}
+err := service.AddEndpointWithDocs(endpoints)
 ```
 
 ## Development Notes
 
-- This codebase uses Go 1.25.1
+- This codebase uses Go 1.25.2
 - Dependencies are vendored in `vendor/` directory
 - Tests require a running NATS server (Docker Compose handles this)
 - The framework uses `dlclark/regexp2` for advanced regex features (named groups, wildcards)
