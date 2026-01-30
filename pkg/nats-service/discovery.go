@@ -26,14 +26,23 @@ type HeaderDoc struct {
 	Example     string `json:"example,omitempty"`
 }
 
+// ParameterDoc represents documentation for a single path parameter
+type ParameterDoc struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+	Example     string `json:"example,omitempty"`
+}
+
 // EndpointDoc represents documentation for a single endpoint
 type EndpointDoc struct {
-	Path         string      `json:"path"`
-	FullSubject  string      `json:"fullSubject"`
-	Parameters   []string    `json:"parameters,omitempty"`
-	Headers      []HeaderDoc `json:"headers,omitempty"`
-	Description  string      `json:"description,omitempty"`
-	WildcardType string      `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
+	Path           string         `json:"path"`
+	FullSubject    string         `json:"fullSubject"`
+	ExampleSubject string         `json:"exampleSubject,omitempty"`
+	Parameters     []ParameterDoc `json:"parameters,omitempty"`
+	Headers        []HeaderDoc    `json:"headers,omitempty"`
+	Description    string         `json:"description,omitempty"`
+	WildcardType   string         `json:"wildcardType,omitempty"` // "single" (*) or "multi" (>)
 }
 
 // registerDiscoveryEndpoint subscribes to the discovery subject.
@@ -84,14 +93,21 @@ func (ns *NatService) buildEndpointDocs() []EndpointDoc {
 			FullSubject: ns.basePath + "." + ep.path,
 		}
 
-		// Automatically extract parameter names from regex
+		// Get auto-discovered parameter names from regex
+		var autoParams []string
 		if ep.paramRegex != nil {
 			groupNames := ep.paramRegex.GetGroupNames()
 			if len(groupNames) > 1 {
 				// Skip group 0 (full match)
-				doc.Parameters = groupNames[1:]
+				autoParams = groupNames[1:]
 			}
 		}
+
+		// Merge auto-discovered params with user-provided documentation
+		doc.Parameters = mergeParameterDocs(autoParams, ep.parameters)
+
+		// Generate example subject by replacing :param with example values
+		doc.ExampleSubject = buildExampleSubject(doc.FullSubject, doc.Parameters)
 
 		// Detect wildcard type
 		if ep.pathHasWildcards {
@@ -116,6 +132,64 @@ func (ns *NatService) buildEndpointDocs() []EndpointDoc {
 	}
 
 	return docs
+}
+
+// buildExampleSubject replaces :param placeholders with example values
+func buildExampleSubject(fullSubject string, params []ParameterDoc) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	example := fullSubject
+	hasExample := false
+
+	for _, p := range params {
+		placeholder := ":" + p.Name
+		if strings.Contains(example, placeholder) {
+			replacement := p.Example
+			if replacement == "" {
+				replacement = "{" + p.Name + "}"
+			} else {
+				hasExample = true
+			}
+			example = strings.Replace(example, placeholder, replacement, 1)
+		}
+	}
+
+	// Only return example if at least one parameter had an example value
+	// or if we have parameters (show placeholder format)
+	if hasExample || len(params) > 0 {
+		return example
+	}
+	return ""
+}
+
+// mergeParameterDocs combines auto-discovered parameter names with user-provided documentation.
+// Auto-discovered names ensure all path parameters are included, while user docs provide
+// descriptions, required flags, and examples.
+func mergeParameterDocs(autoParams []string, userDocs []ParameterDoc) []ParameterDoc {
+	if len(autoParams) == 0 {
+		return nil
+	}
+
+	// Create map from user docs for quick lookup
+	userDocMap := make(map[string]ParameterDoc)
+	for _, pd := range userDocs {
+		userDocMap[pd.Name] = pd
+	}
+
+	result := make([]ParameterDoc, 0, len(autoParams))
+	for _, name := range autoParams {
+		if ud, ok := userDocMap[name]; ok {
+			// Use user-provided doc (ensures Name is set correctly)
+			ud.Name = name
+			result = append(result, ud)
+		} else {
+			// Create minimal doc from auto-discovered name
+			result = append(result, ParameterDoc{Name: name})
+		}
+	}
+	return result
 }
 
 // drainDiscoverySubscription drains the discovery subscription if it exists

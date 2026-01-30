@@ -99,8 +99,9 @@ cd cmd/requester-example && NATS_URL=nats://localhost:4222 go run main.go
 - Endpoints are matched by regex against incoming NATS subjects
 - Path separator can be `.` or `/` (detected automatically)
 - Parameters extracted via regex named groups
-- Use `AddEndpointWithDoc()` to include descriptions for discovery
-- Use `AddEndpointWithDocs()` for batch registration with descriptions
+- Use `AddEndpointWithDoc(path, desc, headers, params, handler)` to include documentation for discovery
+- Use `AddEndpointWithDocs()` for batch registration with documentation
+- Parameter names are auto-discovered from path; user docs add descriptions/examples
 
 **Error Handling**: Return `*NatsServiceError` from handlers
 - Status codes: 400 (validation), 403 (auth), 404 (not found), 500 (server error)
@@ -216,13 +217,29 @@ nats-discover -s nats://localhost:4222 --timeout 5s
 
 ### Registering Endpoints with Documentation
 ```go
-// Single endpoint with description
-err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", userHandler)
+// Single endpoint with description (pass nil for headers/params if not needed)
+err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", nil, nil, userHandler)
+
+// Single endpoint with full documentation
+err := service.AddEndpointWithDoc(
+    "orders.:orderId",
+    "Get order by ID",
+    []nats_service.HeaderDoc{{Name: "Authorization", Required: true}},
+    []nats_service.ParameterDoc{{Name: "orderId", Description: "Order ID", Required: true}},
+    orderHandler,
+)
 
 // Batch registration
 endpoints := []nats_service.EndpointRegistration{
     {Path: "ping", Description: "Health check", Handler: pingHandler},
-    {Path: "users.:userId", Description: "Get user by ID", Handler: userHandler},
+    {
+        Path: "users.:userId",
+        Description: "Get user by ID",
+        Parameters: []nats_service.ParameterDoc{
+            {Name: "userId", Description: "User identifier", Required: true},
+        },
+        Handler: userHandler,
+    },
 }
 err := service.AddEndpointWithDocs(endpoints)
 ```

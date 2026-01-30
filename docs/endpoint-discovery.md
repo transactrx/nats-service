@@ -23,10 +23,24 @@ When a service starts, it automatically registers itself on the `_discovery.all`
 service.AddEndpoint("health", healthHandler)
 ```
 
-### Single Endpoint with Description
+### Single Endpoint with Documentation
 
 ```go
-service.AddEndpointWithDoc("health", "Health check endpoint", healthHandler)
+// Simple endpoint with just a description
+service.AddEndpointWithDoc("health", "Health check endpoint", nil, nil, healthHandler)
+
+// Endpoint with headers and parameter documentation
+service.AddEndpointWithDoc(
+    "orders.:orderId",
+    "Get order by ID",
+    []nats_service.HeaderDoc{
+        {Name: "Authorization", Description: "Bearer token", Required: true},
+    },
+    []nats_service.ParameterDoc{
+        {Name: "orderId", Description: "Unique order identifier", Required: true, Example: "ORD-12345"},
+    },
+    getOrderHandler,
+)
 ```
 
 ### Batch Registration with Full Documentation
@@ -54,6 +68,14 @@ endpoints := []nats_service.EndpointRegistration{
                 Required:    false,
             },
         },
+        Parameters: []nats_service.ParameterDoc{
+            {
+                Name:        "orderId",
+                Description: "Unique order identifier",
+                Required:    true,
+                Example:     "ORD-12345",
+            },
+        },
         Handler: getOrderHandler,
     },
     {
@@ -74,6 +96,17 @@ err := service.AddEndpointWithDocs(endpoints)
 | Description | string | What the header is used for              |
 | Required    | bool   | Whether the header is required           |
 | Example     | string | Example value for documentation          |
+
+### ParameterDoc Fields
+
+| Field       | Type   | Description                              |
+|-------------|--------|------------------------------------------|
+| Name        | string | Parameter name (e.g., "orderId")         |
+| Description | string | What the parameter represents            |
+| Required    | bool   | Whether the parameter is required        |
+| Example     | string | Example value for documentation          |
+
+**Note:** Parameter names are automatically discovered from the endpoint path (e.g., `:orderId` extracts "orderId"). User-provided `ParameterDoc` entries are merged with auto-discovered names to add descriptions and examples.
 
 ## Using the nats-discover CLI
 
@@ -138,16 +171,21 @@ nats-discover -s nats://localhost:4222 --jwt "eyJ..." --seed "SUAM..."
 #### Table (default)
 
 ```
-SERVICE     ENDPOINT                          PARAMETERS  HEADERS                     DESCRIPTION
--------     --------                          ----------  -------                     -----------
-orders.api  orders.api.health                                                         Health check endpoint
-orders.api  orders.api.orders.:orderId        orderId     Authorization*, X-Request-ID  Get order by ID
-orders.api  orders.api.users.:userId.orders   userId      Authorization*              Get all orders for a user
+SERVICE     SUBJECT PATTERN                       EXAMPLE                              DESCRIPTION
+-------     ---------------                       -------                              -----------
+orders.api  orders.api.health                     -                                    Health check endpoint
+orders.api  orders.api.orders.:orderId            orders.api.orders.ORD-12345          Get order by ID
+              Params: orderId* (Unique order identifier)
+              Headers: Authorization*, X-Request-ID
+orders.api  orders.api.users.:userId.orders       orders.api.users.USR-98765.orders    Get all orders for a user
+              Params: userId* (User identifier)
+              Headers: Authorization*
 ```
 
-- Required headers are marked with `*`
-- Parameters show path parameter names
-- Wildcards show `[single wildcard]` or `[multi wildcard]`
+- **SUBJECT PATTERN**: The NATS subject with `:param` placeholders
+- **EXAMPLE**: A concrete example with parameters filled in (from `ParameterDoc.Example`)
+- Required parameters and headers are marked with `*`
+- Parameters without examples show `{paramName}` placeholder
 
 #### JSON
 
@@ -160,7 +198,15 @@ orders.api  orders.api.users.:userId.orders   userId      Authorization*        
       {
         "path": "orders.:orderId",
         "fullSubject": "orders.api.orders.:orderId",
-        "parameters": ["orderId"],
+        "exampleSubject": "orders.api.orders.ORD-12345",
+        "parameters": [
+          {
+            "name": "orderId",
+            "description": "Unique order identifier",
+            "required": true,
+            "example": "ORD-12345"
+          }
+        ],
         "headers": [
           {
             "name": "Authorization",
@@ -184,7 +230,12 @@ basePath: orders.api
 endpoints:
   - path: orders.:orderId
     fullSubject: orders.api.orders.:orderId
-    parameters: [orderId]
+    exampleSubject: orders.api.orders.ORD-12345
+    parameters:
+      - name: orderId
+        description: Unique order identifier
+        required: true
+        example: ORD-12345
     headers:
       - name: Authorization
         description: Bearer token for authentication
@@ -216,8 +267,13 @@ Services respond with a JSON payload:
     {
       "path": "orders.:orderId",
       "fullSubject": "orders.api.orders.:orderId",
-      "parameters": ["orderId"],
-      "headers": [...],
+      "exampleSubject": "orders.api.orders.ORD-12345",
+      "parameters": [
+        {"name": "orderId", "description": "Unique order identifier", "required": true, "example": "ORD-12345"}
+      ],
+      "headers": [
+        {"name": "Authorization", "required": true}
+      ],
       "description": "Get order by ID"
     }
   ]
@@ -229,7 +285,8 @@ Services respond with a JSON payload:
 See `cmd/discovery-example/main.go` for a complete example service demonstrating:
 
 - Batch endpoint registration with `AddEndpointWithDocs()`
-- Header documentation with required/optional flags
+- Header documentation with required/optional flags and examples
+- Parameter documentation with descriptions and examples
 - Path parameters (`:orderId`, `:userId`)
 - Wildcard endpoints (`search.*`)
 

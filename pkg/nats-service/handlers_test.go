@@ -198,9 +198,9 @@ func TestGetCompressedResponse_FilePathInvalid(t *testing.T) {
 		t.Fatal("TestGetCompressedResponse_FilePathInvalid: Expected an error for invalid file path, but got nil")
 	}
 
-	expectedStatus := 500 // Error reading file results in 500
-	expectedApiStatusCode := 1003 // As defined in handlers.go for file read error
-	expectedErrorMessagePart := "file read error" // Public error message
+	expectedStatus := 500                                              // Error reading file results in 500
+	expectedApiStatusCode := 1003                                      // As defined in handlers.go for file read error
+	expectedErrorMessagePart := "file read error"                      // Public error message
 	expectedInternalErrPart := "error reading file " + invalidFilePath // Internal error detail
 
 	if svcErr.Status != expectedStatus {
