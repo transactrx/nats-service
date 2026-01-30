@@ -163,46 +163,62 @@ func resolveConnection(cfg config) (string, []nats.Option, error) {
 	return natsURL, opts, nil
 }
 
+// getNatsConfigDirs returns possible NATS config directories in order of preference.
+// NATS CLI uses ~/.config/nats/ on all platforms, but we also check os.UserConfigDir() as fallback.
+func getNatsConfigDirs() []string {
+	var dirs []string
+
+	// First, check ~/.config/nats (where NATS CLI actually stores contexts)
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".config", "nats"))
+	}
+
+	// Fallback to os.UserConfigDir() (~/Library/Application Support on macOS)
+	if configDir, err := os.UserConfigDir(); err == nil {
+		dirs = append(dirs, filepath.Join(configDir, "nats"))
+	}
+
+	return dirs
+}
+
 func loadNatsContext(name string) (*natsContext, error) {
-	// NATS CLI contexts are stored in ~/.config/nats/context/<name>.json
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return nil, err
+	// Try each config directory
+	for _, dir := range getNatsConfigDirs() {
+		contextPath := filepath.Join(dir, "context", name+".json")
+		data, err := os.ReadFile(contextPath)
+		if err != nil {
+			continue // Try next directory
+		}
+
+		var ctx natsContext
+		if err := json.Unmarshal(data, &ctx); err != nil {
+			return nil, fmt.Errorf("invalid context file: %w", err)
+		}
+
+		return &ctx, nil
 	}
 
-	contextPath := filepath.Join(configDir, "nats", "context", name+".json")
-	data, err := os.ReadFile(contextPath)
-	if err != nil {
-		return nil, fmt.Errorf("context file not found: %s", contextPath)
-	}
-
-	var ctx natsContext
-	if err := json.Unmarshal(data, &ctx); err != nil {
-		return nil, fmt.Errorf("invalid context file: %w", err)
-	}
-
-	return &ctx, nil
+	return nil, fmt.Errorf("context '%s' not found", name)
 }
 
 func loadDefaultContext() (*natsContext, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return nil, err
+	// Try each config directory for context.txt
+	for _, dir := range getNatsConfigDirs() {
+		defaultPath := filepath.Join(dir, "context.txt")
+		data, err := os.ReadFile(defaultPath)
+		if err != nil {
+			continue // Try next directory
+		}
+
+		contextName := strings.TrimSpace(string(data))
+		if contextName == "" {
+			continue
+		}
+
+		return loadNatsContext(contextName)
 	}
 
-	// Check for default context file
-	defaultPath := filepath.Join(configDir, "nats", "context.txt")
-	data, err := os.ReadFile(defaultPath)
-	if err != nil {
-		return nil, err
-	}
-
-	contextName := strings.TrimSpace(string(data))
-	if contextName == "" {
-		return nil, fmt.Errorf("no default context set")
-	}
-
-	return loadNatsContext(contextName)
+	return nil, fmt.Errorf("no default context found")
 }
 
 func contextToOptions(ctx *natsContext) []nats.Option {
