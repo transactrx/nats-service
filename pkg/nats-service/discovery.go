@@ -131,28 +131,19 @@ func (ns *NatService) handleDiscoveryRequest(msg *nats.Msg) {
 	}
 }
 
-// registerApiDocsEndpoint subscribes to the API documentation subject.
-// If subscription fails (e.g., due to permissions), the service continues
-// to operate normally with a warning logged.
+// registerApiDocsEndpoint registers the API documentation endpoint as an internal endpoint.
+// This uses the same routing mechanism as user-defined endpoints.
 func (ns *NatService) registerApiDocsEndpoint() {
-	subject := ns.basePath + "." + ApiDocsSubjectSuffix
-	sub, err := ns.nc.Subscribe(subject, ns.handleApiDocsRequest)
+	err := ns.addEndpointInternal(ApiDocsSubjectSuffix, ns.handleApiDocsRequest, true)
 	if err != nil {
-		log.Printf("WARNING: Unable to subscribe to API docs subject '%s': %v. Service will operate normally.", subject, err)
+		log.Printf("WARNING: Unable to register API docs endpoint: %v. Service will operate normally.", err)
 		return
 	}
-
-	if !sub.IsValid() {
-		log.Printf("WARNING: API docs subscription to '%s' is invalid. Service will operate normally.", subject)
-		return
-	}
-
-	log.Printf("Registered API docs endpoint on subject: %s", subject)
-	ns.apiDocsSubscription = sub
+	log.Printf("Registered API docs endpoint on subject: %s.%s", ns.basePath, ApiDocsSubjectSuffix)
 }
 
 // handleApiDocsRequest responds to API documentation requests with full endpoint documentation
-func (ns *NatService) handleApiDocsRequest(msg *nats.Msg) {
+func (ns *NatService) handleApiDocsRequest(msg *NatsMessage) *NatsServiceError {
 	response := ApiDocsResponse{
 		ServiceName:   ns.basePath,
 		SubjectPrefix: ns.basePath,
@@ -163,31 +154,26 @@ func (ns *NatService) handleApiDocsRequest(msg *nats.Msg) {
 
 	jsonData, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("Error marshaling API docs response: %v", err)
-		return
+		msg.Logger.Printf("Error marshaling API docs response: %v", err)
+		svcErr := NewServerError("failed to generate API documentation", 5001, err)
+		return &svcErr
 	}
 
-	if err := msg.Respond(jsonData); err != nil {
-		log.Printf("Error responding to API docs request: %v", err)
-	}
-}
-
-// drainApiDocsSubscription drains the API docs subscription if it exists
-func (ns *NatService) drainApiDocsSubscription() error {
-	if ns.apiDocsSubscription != nil {
-		if err := ns.apiDocsSubscription.Drain(); err != nil {
-			log.Printf("Error draining API docs subscription: %v", err)
-			return err
-		}
-	}
+	msg.ResponseBody = jsonData
 	return nil
 }
+
 
 // buildEndpointDocs creates documentation for all registered endpoints
 func (ns *NatService) buildEndpointDocs() []EndpointDoc {
 	docs := make([]EndpointDoc, 0, len(ns.endPoints))
 
 	for _, ep := range ns.endPoints {
+		// Skip internal endpoints (e.g., _api_docs) - they are not part of the public API
+		if ep.internal {
+			continue
+		}
+
 		doc := EndpointDoc{
 			Path:        ep.path,
 			FullSubject: ns.basePath + "." + ep.path,
