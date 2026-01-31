@@ -25,7 +25,6 @@ type NatService struct {
 	chunkedSubscription         *nats.Subscription
 	chunkedReceiverSubscription *nats.Subscription
 	discoverySubscription       *nats.Subscription
-	apiDocsSubscription         *nats.Subscription
 	chunkCache                  *ttlcache.Cache[string, [][]byte]
 	endPoints                   []*NatsEndpoint
 	basePath                    string
@@ -60,6 +59,7 @@ type NatsEndpoint struct {
 	headers          []HeaderDoc
 	parameters       []ParameterDoc
 	response         *ResponseDoc
+	internal         bool // true for library-reserved endpoints (e.g., _api_docs)
 }
 
 type NatsEndpointFunc func(msg *NatsMessage) *NatsServiceError
@@ -125,7 +125,12 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 }
 
 func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error {
+	return ns.addEndpointInternal(path, endPoint, false)
+}
 
+// addEndpointInternal is the internal implementation for adding endpoints.
+// The internal flag allows the library to register reserved endpoints.
+func (ns *NatService) addEndpointInternal(path string, endPoint NatsEndpointFunc, internal bool) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return fmt.Errorf("endpoint path cannot be empty")
@@ -133,6 +138,11 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 
 	if endPoint == nil {
 		return fmt.Errorf("endpoint cannot be nil: %w", ConfigError)
+	}
+
+	// Check for reserved suffixes (only for external registrations)
+	if !internal && strings.HasSuffix(path, ApiDocsSubjectSuffix) {
+		return fmt.Errorf("endpoint path '%s' uses reserved suffix '%s': %w", path, ApiDocsSubjectSuffix, ConfigError)
 	}
 
 	pathSeparator := "."
@@ -150,6 +160,7 @@ func (ns *NatService) AddEndpoint(path string, endPoint NatsEndpointFunc) error 
 		path:          path,
 		endPointFunc:  endPoint,
 		pathSeparator: pathSeparator,
+		internal:      internal,
 	}
 
 	hasWildcardSuffix := strings.HasSuffix(path, ">")
@@ -252,6 +263,9 @@ func (ns *NatService) Start() error {
 		return fmt.Errorf("no endpoints configured")
 	}
 
+	// Register internal API docs endpoint before starting the main subscription
+	ns.registerApiDocsEndpoint()
+
 	subscribe, err := ns.nc.QueueSubscribe(ns.basePath+".>", ns.queueName, func(msg *nats.Msg) {
 		for _, endPoint := range ns.endPoints {
 			if msg.Subject == ns.basePath {
@@ -297,9 +311,6 @@ func (ns *NatService) Start() error {
 
 	// Register discovery endpoint (non-blocking, graceful degradation on failure)
 	ns.registerDiscoveryEndpoint()
-
-	// Register API docs endpoint (non-blocking, graceful degradation on failure)
-	ns.registerApiDocsEndpoint()
 
 	return nil
 }
@@ -501,9 +512,7 @@ func (ns *NatService) Shutdown() error {
 	// Drain discovery subscription first (non-blocking if not registered)
 	ns.drainDiscoverySubscription()
 
-	// Drain API docs subscription (non-blocking if not registered)
-	ns.drainApiDocsSubscription()
-
+	// API docs endpoint is handled by the main subscription, no separate drain needed
 	return ns.subscription.Drain()
 }
 
