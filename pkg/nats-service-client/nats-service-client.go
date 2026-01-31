@@ -123,6 +123,24 @@ func NewLowLevelClientWithChunkingAndCompressionDebug(natsUrl string, maxSizeBef
 	return &client, nil
 }
 
+// NewClientFromConnection creates a client from an existing NATS connection.
+// This is useful when you want to manage the connection lifecycle separately
+// or use custom connection options not supported by the other constructors.
+func NewClientFromConnection(nc *nats.Conn) *Client {
+	return NewClientFromConnectionWithOptions(nc, DefaultMaxSizeBeforeCompress, DefaultMaxSizeBeforeChunk, false)
+}
+
+// NewClientFromConnectionWithOptions creates a client from an existing NATS connection
+// with custom compression, chunking thresholds, and debug settings.
+func NewClientFromConnectionWithOptions(nc *nats.Conn, maxSizeBeforeCompress, maxSizeBeforeChunk int, debug bool) *Client {
+	return &Client{
+		nc:                    nc,
+		maxSizeBeforeChunk:    maxSizeBeforeChunk,
+		maxSizeBeforeCompress: maxSizeBeforeCompress,
+		debug:                 debug,
+	}
+}
+
 func (cl *Client) DoRequest(correlationId, subject string, header Header, data []byte, timeout time.Duration) (*NatsResponseMessage, *nats_service.NatsServiceError, error) {
 	requestMsg := nats.Msg{}
 
