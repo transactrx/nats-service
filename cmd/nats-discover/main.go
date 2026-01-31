@@ -14,6 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
+	nats_service_client "github.com/transactrx/nats-service/pkg/nats-service-client"
 )
 
 const (
@@ -338,28 +339,33 @@ func discoverServiceList(nc *nats.Conn, timeout time.Duration) ([]nats_service.S
 }
 
 // getServiceApiDocs fetches API documentation for a specific service.
-// Uses a direct request-response pattern with defaultRequestTimeout.
+// Uses the nats-service-client to properly handle compression and chunking.
 // The serviceName is the base path of the service (e.g., "orders.api").
 func getServiceApiDocs(nc *nats.Conn, serviceName string) (*nats_service.ApiDocsResponse, error) {
 	// Construct the API docs subject directly: {serviceName}._api_docs
 	apiDocsSubject := serviceName + "." + nats_service.ApiDocsSubjectSuffix
 
-	// Send a direct request - returns immediately on first response
-	msg, err := nc.Request(apiDocsSubject, nil, defaultRequestTimeout)
+	// Create a client from the existing connection to handle compression/chunking
+	client := nats_service_client.NewClientFromConnection(nc)
+
+	// Use the client to make the request - handles decompression and chunk reassembly
+	resp, svcErr, err := client.DoRequest("", apiDocsSubject, nil, nil, defaultRequestTimeout)
 	if err != nil {
 		if err == nats.ErrTimeout {
 			return nil, fmt.Errorf("service '%s' not found or not responding (timeout after %v)", serviceName, defaultRequestTimeout)
 		}
 		return nil, fmt.Errorf("failed to get API docs: %w", err)
 	}
+	if svcErr != nil {
+		return nil, fmt.Errorf("service error: %s (status: %d)", svcErr.ErrorMessage, svcErr.Status)
+	}
 
 	var apiDocs nats_service.ApiDocsResponse
-	if err := json.Unmarshal(msg.Data, &apiDocs); err != nil {
+	if err := json.Unmarshal(resp.Data, &apiDocs); err != nil {
 		return nil, fmt.Errorf("failed to parse API docs response: %w", err)
 	}
 	return &apiDocs, nil
 }
-
 
 // outputServiceList outputs the list of discovered services
 func outputServiceList(services []nats_service.ServiceInfo, format string) error {
