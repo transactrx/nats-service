@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	defaultTimeout = 2 * time.Second
-	version        = "1.0.0"
+	defaultDiscoveryTimeout = 3 * time.Second  // For listing services (broadcast, wait for multiple responses)
+	defaultRequestTimeout   = 10 * time.Second // For API docs request (single response)
+	version                 = "1.0.0"
 )
 
 type config struct {
@@ -58,8 +59,8 @@ func main() {
 	defer nc.Close()
 
 	if cfg.service != "" {
-		// Get API docs for a specific service
-		apiDocs, err := getServiceApiDocs(nc, cfg.service, cfg.timeout)
+		// Get API docs for a specific service (uses defaultRequestTimeout)
+		apiDocs, err := getServiceApiDocs(nc, cfg.service)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting API docs for service '%s': %v\n", cfg.service, err)
 			os.Exit(1)
@@ -88,7 +89,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.natsURL, "s", "", "NATS server URL (e.g., nats://localhost:4222)")
 	flag.StringVar(&cfg.natsURL, "server", "", "NATS server URL (e.g., nats://localhost:4222)")
 	flag.StringVar(&cfg.contextName, "context", "", "NATS context name (from nats CLI)")
-	flag.DurationVar(&cfg.timeout, "timeout", defaultTimeout, "Timeout for discovery requests")
+	flag.DurationVar(&cfg.timeout, "timeout", defaultDiscoveryTimeout, "Timeout for discovery broadcast (waiting for multiple services to respond)")
 	flag.StringVar(&cfg.format, "format", "table", "Output format: table, json, yaml")
 	flag.BoolVar(&cfg.showVersion, "version", false, "Show version")
 	flag.StringVar(&cfg.service, "service", "", "Service name to get API docs for")
@@ -336,90 +337,29 @@ func discoverServiceList(nc *nats.Conn, timeout time.Duration) ([]nats_service.S
 	return services, nil
 }
 
-// getServiceApiDocs fetches API documentation for a specific service
-func getServiceApiDocs(nc *nats.Conn, serviceName string, timeout time.Duration) (*nats_service.ApiDocsResponse, error) {
-	// First, discover the service to get its API docs subject
-	services, err := discoverServiceList(nc, timeout)
+// getServiceApiDocs fetches API documentation for a specific service.
+// Uses a direct request-response pattern with defaultRequestTimeout.
+// The serviceName is the base path of the service (e.g., "orders.api").
+func getServiceApiDocs(nc *nats.Conn, serviceName string) (*nats_service.ApiDocsResponse, error) {
+	// Construct the API docs subject directly: {serviceName}._api_docs
+	apiDocsSubject := serviceName + "." + nats_service.ApiDocsSubjectSuffix
+
+	// Send a direct request - returns immediately on first response
+	msg, err := nc.Request(apiDocsSubject, nil, defaultRequestTimeout)
 	if err != nil {
-		return nil, err
-	}
-
-	// Find the service
-	var targetService *nats_service.ServiceInfo
-	for i := range services {
-		if services[i].ServiceName == serviceName {
-			targetService = &services[i]
-			break
+		if err == nats.ErrTimeout {
+			return nil, fmt.Errorf("service '%s' not found or not responding (timeout after %v)", serviceName, defaultRequestTimeout)
 		}
+		return nil, fmt.Errorf("failed to get API docs: %w", err)
 	}
 
-	if targetService == nil {
-		return nil, fmt.Errorf("service '%s' not found", serviceName)
+	var apiDocs nats_service.ApiDocsResponse
+	if err := json.Unmarshal(msg.Data, &apiDocs); err != nil {
+		return nil, fmt.Errorf("failed to parse API docs response: %w", err)
 	}
-
-	// If service has an API docs subject, fetch from there
-	if targetService.ApiDocsSubject != "" {
-		msg, err := nc.Request(targetService.ApiDocsSubject, nil, timeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get API docs: %w", err)
-		}
-
-		var apiDocs nats_service.ApiDocsResponse
-		if err := json.Unmarshal(msg.Data, &apiDocs); err != nil {
-			return nil, fmt.Errorf("failed to parse API docs response: %w", err)
-		}
-		return &apiDocs, nil
-	}
-
-	// Fallback: try legacy discovery to get endpoints
-	// This handles old services that return full DiscoveryResponse
-	return fetchLegacyApiDocs(nc, serviceName, timeout)
+	return &apiDocs, nil
 }
 
-// fetchLegacyApiDocs fetches endpoints from legacy services that include them in discovery
-func fetchLegacyApiDocs(nc *nats.Conn, serviceName string, timeout time.Duration) (*nats_service.ApiDocsResponse, error) {
-	var result *nats_service.ApiDocsResponse
-	var mu sync.Mutex
-
-	inbox := nc.NewInbox()
-
-	sub, err := nc.Subscribe(inbox, func(msg *nats.Msg) {
-		var legacyResp nats_service.DiscoveryResponse
-		if err := json.Unmarshal(msg.Data, &legacyResp); err != nil {
-			return
-		}
-
-		if legacyResp.ServiceName == serviceName && len(legacyResp.Endpoints) > 0 {
-			mu.Lock()
-			result = &nats_service.ApiDocsResponse{
-				ServiceName:   legacyResp.ServiceName,
-				SubjectPrefix: legacyResp.BasePath,
-				Endpoints:     legacyResp.Endpoints,
-			}
-			mu.Unlock()
-		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to subscribe to inbox: %w", err)
-	}
-	defer sub.Unsubscribe()
-
-	if err := nc.PublishRequest(nats_service.DiscoverySubject, inbox, nil); err != nil {
-		return nil, fmt.Errorf("failed to publish discovery request: %w", err)
-	}
-
-	if err := nc.Flush(); err != nil {
-		return nil, fmt.Errorf("failed to flush: %w", err)
-	}
-
-	time.Sleep(timeout)
-
-	if result == nil {
-		return nil, fmt.Errorf("no API docs available for service '%s'", serviceName)
-	}
-
-	return result, nil
-}
 
 // outputServiceList outputs the list of discovered services
 func outputServiceList(services []nats_service.ServiceInfo, format string) error {

@@ -1,12 +1,15 @@
 package nats_service_test
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	nats_service "github.com/transactrx/nats-service/pkg/nats-service"
 	nats_service_client "github.com/transactrx/nats-service/pkg/nats-service-client"
 )
@@ -385,5 +388,272 @@ func TestAddEndpointWithDocs(t *testing.T) {
 	}
 	if string(response.Data) != string(testData) {
 		t.Errorf("Echo: expected '%s', got '%s'", string(testData), string(response.Data))
+	}
+}
+
+// TestDiscoveryIntegration tests the service discovery and API docs functionality
+func TestDiscoveryIntegration(t *testing.T) {
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+
+	queueName := os.Getenv("NATS_QUEUE_NAME")
+	if queueName == "" {
+		queueName = "testing-discovery"
+	}
+
+	// Create service with documented endpoints
+	natService, err := nats_service.NewLowLevelDebug("discovery.test.api", queueName, natsURL, "", "", 1024*2, 1024*300, false)
+	if err != nil {
+		t.Skipf("Skipping test as NATS is not available: %v", err)
+		return
+	}
+
+	// Set service description
+	natService.SetDescription("Test service for discovery integration tests")
+
+	// Define handlers
+	healthHandler := func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+		msg.ResponseBody = []byte(`{"status":"healthy"}`)
+		return nil
+	}
+	getUserHandler := func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+		userID := msg.Parameters["userId"]
+		msg.ResponseBody = []byte(`{"id":"` + userID + `","name":"Test User"}`)
+		return nil
+	}
+
+	// Register endpoints with documentation
+	endpoints := []nats_service.EndpointRegistration{
+		{
+			Path:        "health",
+			Description: "Health check endpoint",
+			Response:    &nats_service.ResponseDoc{Description: "Health status", ContentType: "application/json"},
+			Handler:     healthHandler,
+		},
+		{
+			Path:        "users.:userId",
+			Description: "Get user by ID",
+			Parameters: []nats_service.ParameterDoc{
+				{Name: "userId", Description: "User identifier", Required: true, Example: "user-123"},
+			},
+			Headers: []nats_service.HeaderDoc{
+				{Name: "Authorization", Description: "Bearer token", Required: true},
+			},
+			Response: &nats_service.ResponseDoc{Description: "User object", ContentType: "application/json"},
+			Handler:  getUserHandler,
+		},
+	}
+
+	err = natService.AddEndpointWithDocs(endpoints)
+	if err != nil {
+		t.Fatalf("Failed to add endpoints: %v", err)
+	}
+
+	err = natService.Start()
+	if err != nil {
+		t.Fatalf("Failed to start service: %v", err)
+	}
+	defer natService.Shutdown()
+
+	// Connect directly to NATS for discovery tests
+	nc, err := nats.Connect(natsURL)
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	// Run discovery tests
+	t.Run("TestServiceDiscovery", func(t *testing.T) {
+		testServiceDiscovery(t, nc)
+	})
+
+	t.Run("TestApiDocsEndpoint", func(t *testing.T) {
+		testApiDocsEndpoint(t, nc)
+	})
+
+	t.Run("TestReservedEndpointRejection", func(t *testing.T) {
+		testReservedEndpointRejection(t, natsURL, queueName)
+	})
+}
+
+// testServiceDiscovery tests the _discovery.all broadcast
+func testServiceDiscovery(t *testing.T, nc *nats.Conn) {
+	var results []nats_service.ServiceInfo
+	var mu sync.Mutex
+
+	// Subscribe to collect responses
+	inbox := nc.NewInbox()
+	sub, err := nc.Subscribe(inbox, func(msg *nats.Msg) {
+		var info nats_service.ServiceInfo
+		if err := json.Unmarshal(msg.Data, &info); err != nil {
+			return
+		}
+		mu.Lock()
+		results = append(results, info)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	// Send discovery broadcast
+	err = nc.PublishRequest(nats_service.DiscoverySubject, inbox, nil)
+	if err != nil {
+		t.Fatalf("Failed to publish discovery request: %v", err)
+	}
+	nc.Flush()
+
+	// Wait for responses
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify we got at least one service
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(results) == 0 {
+		t.Fatalf("No services discovered")
+	}
+
+	// Find our test service
+	var found *nats_service.ServiceInfo
+	for i := range results {
+		if results[i].ServiceName == "discovery.test.api" {
+			found = &results[i]
+			break
+		}
+	}
+
+	if found == nil {
+		t.Fatalf("Test service 'discovery.test.api' not found in discovery results")
+	}
+
+	// Verify service info
+	if found.SubjectPrefix != "discovery.test.api" {
+		t.Errorf("Expected SubjectPrefix 'discovery.test.api', got '%s'", found.SubjectPrefix)
+	}
+
+	if found.Description != "Test service for discovery integration tests" {
+		t.Errorf("Expected description 'Test service for discovery integration tests', got '%s'", found.Description)
+	}
+
+	expectedApiDocsSubject := "discovery.test.api._api_docs"
+	if found.ApiDocsSubject != expectedApiDocsSubject {
+		t.Errorf("Expected ApiDocsSubject '%s', got '%s'", expectedApiDocsSubject, found.ApiDocsSubject)
+	}
+}
+
+// testApiDocsEndpoint tests the _api_docs request-response endpoint
+func testApiDocsEndpoint(t *testing.T, nc *nats.Conn) {
+	// Send direct request to API docs endpoint
+	apiDocsSubject := "discovery.test.api._api_docs"
+	msg, err := nc.Request(apiDocsSubject, nil, 5*time.Second)
+	if err != nil {
+		t.Fatalf("Failed to get API docs: %v", err)
+	}
+
+	// Parse response
+	var apiDocs nats_service.ApiDocsResponse
+	if err := json.Unmarshal(msg.Data, &apiDocs); err != nil {
+		t.Fatalf("Failed to parse API docs response: %v", err)
+	}
+
+	// Verify service info
+	if apiDocs.ServiceName != "discovery.test.api" {
+		t.Errorf("Expected ServiceName 'discovery.test.api', got '%s'", apiDocs.ServiceName)
+	}
+
+	if apiDocs.Description != "Test service for discovery integration tests" {
+		t.Errorf("Expected description, got '%s'", apiDocs.Description)
+	}
+
+	// Verify we have status codes
+	if len(apiDocs.StatusCodes) == 0 {
+		t.Error("Expected status codes in response")
+	}
+
+	// Verify endpoints
+	if len(apiDocs.Endpoints) != 2 {
+		t.Fatalf("Expected 2 endpoints, got %d", len(apiDocs.Endpoints))
+	}
+
+	// Find and verify the health endpoint
+	var healthEndpoint, userEndpoint *nats_service.EndpointDoc
+	for i := range apiDocs.Endpoints {
+		if apiDocs.Endpoints[i].Path == "health" {
+			healthEndpoint = &apiDocs.Endpoints[i]
+		}
+		if apiDocs.Endpoints[i].Path == "users.:userId" {
+			userEndpoint = &apiDocs.Endpoints[i]
+		}
+	}
+
+	if healthEndpoint == nil {
+		t.Fatal("Health endpoint not found in API docs")
+	}
+	if healthEndpoint.Description != "Health check endpoint" {
+		t.Errorf("Health endpoint description mismatch: %s", healthEndpoint.Description)
+	}
+	if healthEndpoint.FullSubject != "discovery.test.api.health" {
+		t.Errorf("Health endpoint FullSubject mismatch: %s", healthEndpoint.FullSubject)
+	}
+
+	if userEndpoint == nil {
+		t.Fatal("User endpoint not found in API docs")
+	}
+	if userEndpoint.Description != "Get user by ID" {
+		t.Errorf("User endpoint description mismatch: %s", userEndpoint.Description)
+	}
+
+	// Verify user endpoint has parameters
+	if len(userEndpoint.Parameters) != 1 {
+		t.Fatalf("Expected 1 parameter for user endpoint, got %d", len(userEndpoint.Parameters))
+	}
+	if userEndpoint.Parameters[0].Name != "userId" {
+		t.Errorf("Expected parameter name 'userId', got '%s'", userEndpoint.Parameters[0].Name)
+	}
+	if userEndpoint.Parameters[0].Description != "User identifier" {
+		t.Errorf("Expected parameter description 'User identifier', got '%s'", userEndpoint.Parameters[0].Description)
+	}
+
+	// Verify user endpoint has headers
+	if len(userEndpoint.Headers) != 1 {
+		t.Fatalf("Expected 1 header for user endpoint, got %d", len(userEndpoint.Headers))
+	}
+	if userEndpoint.Headers[0].Name != "Authorization" {
+		t.Errorf("Expected header name 'Authorization', got '%s'", userEndpoint.Headers[0].Name)
+	}
+
+	// Verify example subject is generated
+	if userEndpoint.ExampleSubject == "" {
+		t.Error("Expected ExampleSubject to be generated for parameterized endpoint")
+	}
+	if !strings.Contains(userEndpoint.ExampleSubject, "user-123") {
+		t.Errorf("ExampleSubject should contain example value 'user-123', got '%s'", userEndpoint.ExampleSubject)
+	}
+}
+
+// testReservedEndpointRejection verifies that users cannot register endpoints with reserved suffixes
+func testReservedEndpointRejection(t *testing.T, natsURL, queueName string) {
+	natService, err := nats_service.NewLowLevelDebug("reserved.test.api", queueName+"-reserved", natsURL, "", "", 1024*2, 1024*300, false)
+	if err != nil {
+		t.Skipf("Skipping test as NATS is not available: %v", err)
+		return
+	}
+
+	// Try to register an endpoint with reserved suffix
+	handler := func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+		return nil
+	}
+
+	err = natService.AddEndpoint("my_api_docs", handler)
+	if err == nil {
+		t.Error("Expected error when registering endpoint with reserved suffix '_api_docs'")
+	}
+
+	if !strings.Contains(err.Error(), "reserved suffix") {
+		t.Errorf("Error should mention 'reserved suffix', got: %v", err)
 	}
 }
