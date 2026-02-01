@@ -25,12 +25,16 @@ type NatService struct {
 	chunkedSubscription         *nats.Subscription
 	chunkedReceiverSubscription *nats.Subscription
 	discoverySubscription       *nats.Subscription
+	statsSubscription           *nats.Subscription
 	chunkCache                  *ttlcache.Cache[string, [][]byte]
 	endPoints                   []*NatsEndpoint
+	endpointStats               map[string]*EndPointStats // stats per endpoint path
 	basePath                    string
 	queueName                   string
 	description                 string
 	repositoryURL               string
+	instanceId                  string
+	startTime                   time.Time
 	maxRespSizeToCompress       int
 	maxRespSizeToChunk          int
 	debug                       bool
@@ -96,6 +100,16 @@ func (ns *NatService) SetRepositoryURL(url string) {
 	ns.repositoryURL = url
 }
 
+// GetInstanceId returns the unique identifier for this service instance
+func (ns *NatService) GetInstanceId() string {
+	return ns.instanceId
+}
+
+// getUptime returns the service uptime as a human-readable string
+func (ns *NatService) getUptime() string {
+	return time.Since(ns.startTime).Round(time.Second).String()
+}
+
 func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {
 	natsDebug := os.Getenv("NATS_DEBUG")
 
@@ -118,6 +132,11 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 	}
 	log.Printf("Connected to NATS server at %s", natsUrl)
 
+	// Generate instance ID: hostname-shortUUID
+	hostname, _ := os.Hostname()
+	shortId := uuid.New().String()[:8]
+	instanceId := fmt.Sprintf("%s-%s", hostname, shortId)
+
 	ns := NatService{
 		url:                   natsUrl,
 		nc:                    nc,
@@ -126,6 +145,9 @@ func NewLowLevelDebug(basePath, natsQueueName, natsUrl, natsToken, natsKey strin
 		maxRespSizeToCompress: maxRespSizeToCompress,
 		maxRespSizeToChunk:    maxRespSizeToChunk,
 		chunkCache:            ttlcache.New[string, [][]byte](),
+		endpointStats:         make(map[string]*EndPointStats),
+		instanceId:            instanceId,
+		startTime:             time.Now(),
 		debug:                 debug,
 	}
 
@@ -320,6 +342,9 @@ func (ns *NatService) Start() error {
 	// Register discovery endpoint (non-blocking, graceful degradation on failure)
 	ns.registerDiscoveryEndpoint()
 
+	// Register stats endpoint (broadcast, no queue group - all instances respond)
+	ns.registerStatsEndpoint()
+
 	return nil
 }
 
@@ -428,6 +453,10 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 	if errResponding != nil {
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
+
+	// Track endpoint stats
+	stats := ns.getOrCreateEndpointStats(endPoint.path)
+	stats.AddTransactionLatency(elapsedTime, err == nil)
 
 	if ns.debug {
 		natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)

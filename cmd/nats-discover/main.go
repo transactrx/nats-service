@@ -30,7 +30,8 @@ type config struct {
 	timeout     time.Duration
 	format      string
 	showVersion bool
-	service     string // specific service to get API docs for
+	service     string // specific service to get API docs or stats for
+	stats       bool   // get stats instead of API docs
 	creds       string
 	nkey        string
 	jwt         string
@@ -60,7 +61,22 @@ func main() {
 	}
 	defer nc.Close()
 
-	if cfg.service != "" {
+	if cfg.stats {
+		// Get stats for a service (requires service name)
+		if cfg.service == "" {
+			fmt.Fprintf(os.Stderr, "Error: --stats requires -S/--service to specify the service\n")
+			os.Exit(1)
+		}
+		stats, err := getServiceStats(nc, cfg.service, cfg.timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting stats for service '%s': %v\n", cfg.service, err)
+			os.Exit(1)
+		}
+		if err := outputStats(stats, cfg.format); err != nil {
+			fmt.Fprintf(os.Stderr, "Error formatting output: %v\n", err)
+			os.Exit(1)
+		}
+	} else if cfg.service != "" {
 		// Get API docs for a specific service (uses defaultRequestTimeout)
 		apiDocs, err := getServiceApiDocs(nc, cfg.service)
 		if err != nil {
@@ -94,8 +110,9 @@ func parseFlags() config {
 	flag.DurationVar(&cfg.timeout, "timeout", defaultDiscoveryTimeout, "Timeout for discovery broadcast (waiting for multiple services to respond)")
 	flag.StringVar(&cfg.format, "format", "table", "Output format: table, json, yaml")
 	flag.BoolVar(&cfg.showVersion, "version", false, "Show version")
-	flag.StringVar(&cfg.service, "service", "", "Service name to get API docs for")
-	flag.StringVar(&cfg.service, "S", "", "Service name to get API docs for (shorthand)")
+	flag.StringVar(&cfg.service, "service", "", "Service name to get API docs or stats for")
+	flag.StringVar(&cfg.service, "S", "", "Service name to get API docs or stats for (shorthand)")
+	flag.BoolVar(&cfg.stats, "stats", false, "Get stats for a service (requires -S/--service)")
 	flag.StringVar(&cfg.creds, "creds", "", "Path to credentials file")
 	flag.StringVar(&cfg.nkey, "nkey", "", "Path to NKey file")
 	flag.StringVar(&cfg.jwt, "jwt", "", "JWT token for authentication")
@@ -107,8 +124,9 @@ func parseFlags() config {
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222                    # List all services\n")
-		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 -S orders.api      # Show endpoints for orders.api\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222                         # List all services\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 -S orders.api           # Show endpoints for orders.api\n")
+		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 -S orders.api --stats   # Show stats for all instances\n")
 		fmt.Fprintf(os.Stderr, "  nats-discover -s nats://localhost:4222 --service orders.api --format json\n")
 	}
 
@@ -366,6 +384,214 @@ func getServiceApiDocs(nc *nats.Conn, serviceName string) (*nats_service.ApiDocs
 		return nil, fmt.Errorf("failed to parse API docs response: %w", err)
 	}
 	return &apiDocs, nil
+}
+
+// AggregatedStats contains combined stats from all instances of a service
+type AggregatedStats struct {
+	ServiceName    string                              `json:"serviceName"`
+	InstanceCount  int                                 `json:"instanceCount"`
+	Instances      []nats_service.InstanceStatsResponse `json:"instances"`
+	AggregatedEndpoints []AggregatedEndpointStats      `json:"aggregatedEndpoints"`
+}
+
+// AggregatedEndpointStats contains combined stats for a single endpoint across all instances
+type AggregatedEndpointStats struct {
+	Subject       string  `json:"subject"`
+	TotalSuccess  int64   `json:"totalSuccess"`
+	TotalFailures int64   `json:"totalFailures"`
+	MinLatencyMs  float64 `json:"minLatencyMs"`
+	MaxLatencyMs  float64 `json:"maxLatencyMs"`
+	AvgLatencyMs  float64 `json:"avgLatencyMs"`
+	// Per-instance percentiles (aggregating percentiles is statistically complex)
+	P50Range string `json:"p50RangeMs"`
+	P95Range string `json:"p95RangeMs"`
+}
+
+// getServiceStats collects stats from all instances of a service
+func getServiceStats(nc *nats.Conn, serviceName string, timeout time.Duration) (*AggregatedStats, error) {
+	results := make([]nats_service.InstanceStatsResponse, 0)
+	var mu sync.Mutex
+
+	// Create an inbox for receiving responses
+	inbox := nc.NewInbox()
+
+	// Subscribe to the inbox
+	sub, err := nc.Subscribe(inbox, func(msg *nats.Msg) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		var instanceStats nats_service.InstanceStatsResponse
+		if err := json.Unmarshal(msg.Data, &instanceStats); err != nil {
+			return // Skip malformed responses
+		}
+		results = append(results, instanceStats)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe to inbox: %w", err)
+	}
+	defer sub.Unsubscribe()
+
+	// Publish stats request (broadcast - all instances respond)
+	statsSubject := serviceName + "." + nats_service.StatsSubjectSuffix
+	if err := nc.PublishRequest(statsSubject, inbox, nil); err != nil {
+		return nil, fmt.Errorf("failed to publish stats request: %w", err)
+	}
+
+	// Flush to ensure the message is sent
+	if err := nc.Flush(); err != nil {
+		return nil, fmt.Errorf("failed to flush: %w", err)
+	}
+
+	// Wait for responses
+	time.Sleep(timeout)
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no instances responded for service '%s'", serviceName)
+	}
+
+	// Aggregate results
+	aggregated := &AggregatedStats{
+		ServiceName:   serviceName,
+		InstanceCount: len(results),
+		Instances:     results,
+	}
+
+	// Aggregate endpoint stats across instances
+	endpointMap := make(map[string]*AggregatedEndpointStats)
+	endpointP50s := make(map[string][]float64)
+	endpointP95s := make(map[string][]float64)
+	endpointAvgSums := make(map[string]float64)
+	endpointCounts := make(map[string]int64)
+
+	for _, instance := range results {
+		for _, ep := range instance.Endpoints {
+			if _, ok := endpointMap[ep.Subject]; !ok {
+				endpointMap[ep.Subject] = &AggregatedEndpointStats{
+					Subject:      ep.Subject,
+					MinLatencyMs: ep.Latency.Min,
+					MaxLatencyMs: ep.Latency.Max,
+				}
+				endpointP50s[ep.Subject] = make([]float64, 0)
+				endpointP95s[ep.Subject] = make([]float64, 0)
+			}
+
+			agg := endpointMap[ep.Subject]
+			agg.TotalSuccess += ep.Success
+			agg.TotalFailures += ep.Failures
+
+			if ep.Latency.Min < agg.MinLatencyMs || agg.MinLatencyMs == 0 {
+				agg.MinLatencyMs = ep.Latency.Min
+			}
+			if ep.Latency.Max > agg.MaxLatencyMs {
+				agg.MaxLatencyMs = ep.Latency.Max
+			}
+
+			// Track for weighted average
+			endpointAvgSums[ep.Subject] += ep.Latency.Avg * float64(ep.Latency.Count)
+			endpointCounts[ep.Subject] += ep.Latency.Count
+
+			// Track percentiles for range display
+			if ep.Latency.Count > 0 {
+				endpointP50s[ep.Subject] = append(endpointP50s[ep.Subject], ep.Latency.P50)
+				endpointP95s[ep.Subject] = append(endpointP95s[ep.Subject], ep.Latency.P95)
+			}
+		}
+	}
+
+	// Calculate weighted averages and percentile ranges
+	for subject, agg := range endpointMap {
+		if endpointCounts[subject] > 0 {
+			agg.AvgLatencyMs = endpointAvgSums[subject] / float64(endpointCounts[subject])
+		}
+
+		p50s := endpointP50s[subject]
+		p95s := endpointP95s[subject]
+
+		if len(p50s) > 0 {
+			sort.Float64s(p50s)
+			sort.Float64s(p95s)
+			agg.P50Range = fmt.Sprintf("%.2f-%.2f", p50s[0], p50s[len(p50s)-1])
+			agg.P95Range = fmt.Sprintf("%.2f-%.2f", p95s[0], p95s[len(p95s)-1])
+		}
+
+		aggregated.AggregatedEndpoints = append(aggregated.AggregatedEndpoints, *agg)
+	}
+
+	// Sort by subject
+	sort.Slice(aggregated.AggregatedEndpoints, func(i, j int) bool {
+		return aggregated.AggregatedEndpoints[i].Subject < aggregated.AggregatedEndpoints[j].Subject
+	})
+
+	return aggregated, nil
+}
+
+// outputStats outputs the aggregated stats
+func outputStats(stats *AggregatedStats, format string) error {
+	switch strings.ToLower(format) {
+	case "json":
+		data, err := json.MarshalIndent(stats, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+
+	case "yaml":
+		fmt.Printf("serviceName: %s\n", stats.ServiceName)
+		fmt.Printf("instanceCount: %d\n", stats.InstanceCount)
+		fmt.Println("instances:")
+		for _, inst := range stats.Instances {
+			fmt.Printf("  - instanceId: %s\n", inst.InstanceId)
+			fmt.Printf("    uptime: %s\n", inst.Uptime)
+			if len(inst.Endpoints) > 0 {
+				fmt.Println("    endpoints:")
+				for _, ep := range inst.Endpoints {
+					fmt.Printf("      - subject: %s\n", ep.Subject)
+					fmt.Printf("        success: %d\n", ep.Success)
+					fmt.Printf("        failures: %d\n", ep.Failures)
+					fmt.Printf("        latency:\n")
+					fmt.Printf("          avgMs: %.2f\n", ep.Latency.Avg)
+					fmt.Printf("          p95Ms: %.2f\n", ep.Latency.P95)
+				}
+			}
+		}
+		fmt.Println("aggregatedEndpoints:")
+		for _, ep := range stats.AggregatedEndpoints {
+			fmt.Printf("  - subject: %s\n", ep.Subject)
+			fmt.Printf("    totalSuccess: %d\n", ep.TotalSuccess)
+			fmt.Printf("    totalFailures: %d\n", ep.TotalFailures)
+			fmt.Printf("    avgLatencyMs: %.2f\n", ep.AvgLatencyMs)
+			fmt.Printf("    p95RangeMs: %s\n", ep.P95Range)
+		}
+
+	case "table":
+		fmt.Printf("Service: %s\n", stats.ServiceName)
+		fmt.Printf("Instances: %d\n\n", stats.InstanceCount)
+
+		// Instance summary
+		fmt.Println("INSTANCES:")
+		fmt.Printf("%-30s %-20s\n", "INSTANCE ID", "UPTIME")
+		fmt.Printf("%-30s %-20s\n", strings.Repeat("-", 30), strings.Repeat("-", 20))
+		for _, inst := range stats.Instances {
+			fmt.Printf("%-30s %-20s\n", truncateString(inst.InstanceId, 30), inst.Uptime)
+		}
+		fmt.Println()
+
+		// Aggregated endpoint stats
+		fmt.Println("AGGREGATED ENDPOINT STATS:")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintf(w, "ENDPOINT\tSUCCESS\tFAILURES\tAVG(ms)\tMIN(ms)\tMAX(ms)\tP95 RANGE(ms)\n")
+		fmt.Fprintf(w, "--------\t-------\t--------\t-------\t-------\t-------\t-------------\n")
+		for _, ep := range stats.AggregatedEndpoints {
+			fmt.Fprintf(w, "%s\t%d\t%d\t%.2f\t%.2f\t%.2f\t%s\n",
+				ep.Subject, ep.TotalSuccess, ep.TotalFailures,
+				ep.AvgLatencyMs, ep.MinLatencyMs, ep.MaxLatencyMs, ep.P95Range)
+		}
+		w.Flush()
+
+	default:
+		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
+	}
+	return nil
 }
 
 // outputServiceList outputs the list of discovered services
