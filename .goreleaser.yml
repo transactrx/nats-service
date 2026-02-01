@@ -19,13 +19,15 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
-brews:
+homebrew:
   - repository:
       owner: transactrx
       name: homebrew-tap
