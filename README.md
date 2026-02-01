@@ -407,6 +407,159 @@ go run ./cmd/nats-discover -s nats://localhost:4222
 5. **Add Health Checks**: Include a health endpoint for monitoring
 6. **Use Correlation IDs**: Pass correlation IDs through headers for distributed tracing
 
+## Coding Agent Prompt for Full Service Documentation
+
+When using a coding agent (like Claude) to document your nats-service microservice, use the following prompt to ensure complete and thorough documentation of all endpoints and the service itself:
+
+---
+
+**Prompt:**
+
+```
+Analyze this nats-service microservice and add complete documentation for endpoint discovery. Follow these steps:
+
+## Step 1: Understand the Service
+- Read the main.go and all handler files to understand what this service does
+- Identify the service's purpose, domain, and responsibilities
+- Find the git repository URL for this project
+
+## Step 2: Configure Service Metadata
+Add these calls before service.Start():
+- SetDescription(): Write a clear 1-2 sentence description of what this service does
+- SetRepositoryURL(): Set the git origin URL so users can find the source code
+
+## Step 3: Document Each Endpoint
+For EVERY endpoint, ensure AddEndpointWithDoc() or AddEndpointWithDocs() includes:
+
+### Path & Description
+- path: The NATS subject pattern (e.g., "orders.:orderId")
+- description: Clear explanation of what this endpoint does (1-2 sentences)
+
+### Parameters ([]ParameterDoc)
+For each path parameter (e.g., :userId, :orderId):
+- Name: Parameter name (must match the :param in path)
+- Description: What this parameter represents
+- Required: true for path parameters
+- Example: A realistic example value (e.g., "USR-123", "ORD-456")
+
+### Headers ([]HeaderDoc)
+For each expected request header:
+- Name: Header name (e.g., "Authorization", "X-Tenant-ID")
+- Description: What this header is for
+- Required: true/false
+- Example: Example value (e.g., "Bearer eyJ...")
+
+### Response (*ResponseDoc)
+- Description: What the response contains
+- ContentType: MIME type (e.g., "application/json")
+- Example: A realistic JSON example of the response
+- Headers: Any custom response headers returned
+
+## Step 4: Verify Completeness
+Ensure every endpoint has:
+- [ ] Meaningful description (not just the path repeated)
+- [ ] All path parameters documented with examples
+- [ ] All expected headers documented
+- [ ] Response documentation with content type
+- [ ] Realistic examples that help users understand the data format
+
+## Output Format
+Provide the complete code changes needed to fully document this service.
+```
+
+---
+
+### Example of Complete Documentation
+
+```go
+func main() {
+    service, _ := nats_service.New("orders.api")
+
+    // Service metadata
+    service.SetDescription("Order management service - handles order creation, retrieval, updates, and fulfillment workflows")
+    service.SetRepositoryURL("https://github.com/mycompany/order-service")
+
+    // Fully documented endpoints
+    endpoints := []nats_service.EndpointRegistration{
+        {
+            Path:        "health",
+            Description: "Health check endpoint for monitoring and load balancer probes",
+            Response: &nats_service.ResponseDoc{
+                Description: "Service health status",
+                ContentType: "application/json",
+                Example:     `{"status": "healthy", "timestamp": "2024-01-15T10:30:00Z"}`,
+            },
+            Handler: healthHandler,
+        },
+        {
+            Path:        "orders.:orderId",
+            Description: "Retrieve a specific order by its unique identifier",
+            Headers: []nats_service.HeaderDoc{
+                {
+                    Name:        "Authorization",
+                    Description: "Bearer token for authentication",
+                    Required:    true,
+                    Example:     "Bearer eyJhbGciOiJIUzI1NiIs...",
+                },
+                {
+                    Name:        "X-Tenant-ID",
+                    Description: "Tenant identifier for multi-tenant isolation",
+                    Required:    true,
+                    Example:     "tenant-abc-123",
+                },
+            },
+            Parameters: []nats_service.ParameterDoc{
+                {
+                    Name:        "orderId",
+                    Description: "Unique order identifier (UUID format)",
+                    Required:    true,
+                    Example:     "ord-550e8400-e29b-41d4-a716-446655440000",
+                },
+            },
+            Response: &nats_service.ResponseDoc{
+                Description: "Complete order details including line items and status",
+                ContentType: "application/json",
+                Example:     `{"id": "ord-550e8400-e29b-41d4-a716-446655440000", "status": "pending", "total": 99.99, "items": [{"sku": "PROD-001", "qty": 2}]}`,
+            },
+            Handler: getOrderHandler,
+        },
+        {
+            Path:        "orders.customer.:customerId",
+            Description: "List all orders for a specific customer with optional filtering",
+            Headers: []nats_service.HeaderDoc{
+                {Name: "Authorization", Description: "Bearer token", Required: true},
+            },
+            Parameters: []nats_service.ParameterDoc{
+                {
+                    Name:        "customerId",
+                    Description: "Customer's unique identifier",
+                    Required:    true,
+                    Example:     "cust-12345",
+                },
+            },
+            Response: &nats_service.ResponseDoc{
+                Description: "Paginated list of customer orders",
+                ContentType: "application/json",
+                Example:     `{"orders": [...], "total": 42, "page": 1, "pageSize": 20}`,
+            },
+            Handler: getCustomerOrdersHandler,
+        },
+    }
+
+    service.AddEndpointWithDocs(endpoints)
+    service.Start()
+}
+```
+
+### Documentation Quality Checklist
+
+| Field | Bad Example | Good Example |
+|-------|-------------|--------------|
+| Description | "Get order" | "Retrieve a specific order by its unique identifier including line items, shipping info, and payment status" |
+| Parameter Example | "123" | "ord-550e8400-e29b-41d4-a716-446655440000" |
+| Header Example | "token" | "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." |
+| Response Example | `{}` | `{"id": "ord-123", "status": "pending", "items": [...]}` |
+
 ## License
 
 See [LICENSE](LICENSE) file.
