@@ -1,3 +1,5 @@
+version: 2
+
 project_name: nats-discover
 
 builds:
@@ -6,6 +8,7 @@ builds:
     goos:
       - darwin
       - linux
+      - windows
     goarch:
       - amd64
       - arm64
@@ -18,6 +21,9 @@ builds:
 archives:
   - format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
 
 brews:
   - repository:
@@ -32,6 +38,15 @@ brews:
       bin.install "nats-discover"
     test: |
       system "#{bin}/nats-discover", "--version"
+
+scoops:
+  - repository:
+      owner: transactrx
+      name: scoop-bucket
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/transactrx/nats-service
+    description: CLI tool to discover NATS services using the nats-service framework
+    license: MIT
 
 checksum:
   name_template: checksums.txt
