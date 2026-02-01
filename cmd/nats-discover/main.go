@@ -20,6 +20,10 @@ import (
 const (
 	defaultDiscoveryTimeout = 3 * time.Second  // For listing services (broadcast, wait for multiple responses)
 	defaultRequestTimeout   = 10 * time.Second // For API docs request (single response)
+
+	// ANSI escape codes for text styling
+	ansiDim   = "\033[2m"
+	ansiReset = "\033[0m"
 )
 
 var version = "dev" // Set via ldflags: -X main.version=...
@@ -640,11 +644,11 @@ func outputServiceList(services []nats_service.ServiceInfo, format string) error
 			}
 			fmt.Printf("%-50s %-50s %s\n", serviceName, subjectPrefix, repoURL)
 
-			// Line 2: description (wrapped)
+			// Line 2: description (wrapped, dim)
 			if svc.Description != "" {
-				wrappedDesc := wrapText(svc.Description, 150)
+				wrappedDesc := wrapText(sanitizeText(svc.Description), 150)
 				for _, line := range wrappedDesc {
-					fmt.Printf("  %s\n", line)
+					fmt.Printf("  %s%s%s\n", ansiDim, line, ansiReset)
 				}
 			}
 
@@ -763,7 +767,7 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Printf("Service: %s\n", apiDocs.ServiceName)
 		if apiDocs.Description != "" {
-			fmt.Printf("Description: %s\n", apiDocs.Description)
+			fmt.Printf("Description: %s%s%s\n", ansiDim, sanitizeText(apiDocs.Description), ansiReset)
 		}
 		if apiDocs.RepositoryURL != "" {
 			fmt.Printf("Repository: %s\n", apiDocs.RepositoryURL)
@@ -779,6 +783,10 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 			}
 			// Sanitize description: replace newlines/tabs with spaces, collapse multiple spaces
 			desc := sanitizeText(ep.Description)
+			// Apply dim styling to description
+			if desc != "" {
+				desc = ansiDim + desc + ansiReset
+			}
 			fmt.Fprintf(w, "%s\t%s\t%s\n", ep.FullSubject, example, desc)
 
 			// Show parameters and headers
