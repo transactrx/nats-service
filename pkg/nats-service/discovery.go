@@ -19,6 +19,7 @@ type ServiceInfo struct {
 	ServiceName    string `json:"serviceName"`
 	SubjectPrefix  string `json:"subjectPrefix"`
 	Description    string `json:"description,omitempty"`
+	RepositoryURL  string `json:"repositoryUrl,omitempty"`
 	ApiDocsSubject string `json:"apiDocsSubject,omitempty"`
 }
 
@@ -27,6 +28,7 @@ type ApiDocsResponse struct {
 	ServiceName   string          `json:"serviceName"`
 	SubjectPrefix string          `json:"subjectPrefix"`
 	Description   string          `json:"description,omitempty"`
+	RepositoryURL string          `json:"repositoryUrl,omitempty"`
 	StatusCodes   []StatusCodeDoc `json:"statusCodes,omitempty"` // Standard status codes for all endpoints
 	Endpoints     []EndpointDoc   `json:"endpoints"`
 }
@@ -117,6 +119,7 @@ func (ns *NatService) handleDiscoveryRequest(msg *nats.Msg) {
 		ServiceName:    ns.basePath,
 		SubjectPrefix:  ns.basePath,
 		Description:    ns.description,
+		RepositoryURL:  ns.repositoryURL,
 		ApiDocsSubject: ns.basePath + "." + ApiDocsSubjectSuffix,
 	}
 
@@ -148,6 +151,7 @@ func (ns *NatService) handleApiDocsRequest(msg *NatsMessage) *NatsServiceError {
 		ServiceName:   ns.basePath,
 		SubjectPrefix: ns.basePath,
 		Description:   ns.description,
+		RepositoryURL: ns.repositoryURL,
 		StatusCodes:   standardStatusCodes(),
 		Endpoints:     ns.buildEndpointDocs(),
 	}

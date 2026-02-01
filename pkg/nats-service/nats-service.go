@@ -30,6 +30,7 @@ type NatService struct {
 	basePath                    string
 	queueName                   string
 	description                 string
+	repositoryURL               string
 	maxRespSizeToCompress       int
 	maxRespSizeToChunk          int
 	debug                       bool
@@ -86,6 +87,13 @@ func (ns *NatService) GetNatsService() *nats.Conn {
 // This should be called before Start() to ensure the description is available during discovery.
 func (ns *NatService) SetDescription(description string) {
 	ns.description = description
+}
+
+// SetRepositoryURL sets the git repository URL for the service source code.
+// This helps users and coding agents find the source to better understand the microservice.
+// This should be called before Start() to ensure the URL is available during discovery.
+func (ns *NatService) SetRepositoryURL(url string) {
+	ns.repositoryURL = url
 }
 
 func NewLowLevel(basePath, natsQueueName, natsUrl, natsToken, natsKey string, maxRespSizeToCompress, maxRespSizeToChunk int) (*NatService, error) {

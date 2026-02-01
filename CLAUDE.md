@@ -88,10 +88,11 @@ cd cmd/requester-example && NATS_URL=nats://localhost:4222 go run main.go
 - Automatic decompression by recipient
 
 **Endpoint Discovery**: Services automatically register for discovery
-- Discovery subject: `_discovery.all` returns basic service info (name, prefix, description)
+- Discovery subject: `_discovery.all` returns basic service info (name, prefix, description, repository URL)
 - API docs subject: `{basePath}._api_docs` returns full endpoint documentation
 - Two-phase discovery: list services first, then fetch details for specific service
 - Use `SetDescription()` to add a service description for discovery
+- Use `SetRepositoryURL()` to add a git repository URL for source code access
 - Graceful degradation if subscription fails (service continues normally)
 
 ### Important Implementation Details
@@ -223,8 +224,9 @@ nats-discover -s nats://localhost:4222 --timeout 5s
 
 ### Registering Endpoints with Documentation
 ```go
-// Set service description (shown in discovery responses)
+// Set service metadata (shown in discovery responses)
 service.SetDescription("Order management API - handles order CRUD operations")
+service.SetRepositoryURL("https://github.com/transactrx/order-service")
 
 // Single endpoint with description (pass nil for headers/params/response if not needed)
 err := service.AddEndpointWithDoc("users.:userId", "Get user by ID", nil, nil, nil, userHandler)
