@@ -20,8 +20,9 @@ import (
 const (
 	defaultDiscoveryTimeout = 3 * time.Second  // For listing services (broadcast, wait for multiple responses)
 	defaultRequestTimeout   = 10 * time.Second // For API docs request (single response)
-	version                 = "1.0.0"
 )
+
+var version = "dev" // Set via ldflags: -X main.version=...
 
 type config struct {
 	natsURL     string
