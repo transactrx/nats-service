@@ -777,10 +777,8 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 			if example == "" {
 				example = "-"
 			}
-			desc := ep.Description
-			if len(desc) > 40 {
-				desc = desc[:37] + "..."
-			}
+			// Sanitize description: replace newlines/tabs with spaces, collapse multiple spaces
+			desc := sanitizeText(ep.Description)
 			fmt.Fprintf(w, "%s\t%s\t%s\n", ep.FullSubject, example, desc)
 
 			// Show parameters and headers
@@ -826,6 +824,19 @@ func truncateString(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// sanitizeText removes newlines, tabs, and collapses multiple spaces into single spaces
+func sanitizeText(text string) string {
+	// Replace newlines and tabs with spaces
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\t", " ")
+	// Collapse multiple spaces into single space
+	for strings.Contains(text, "  ") {
+		text = strings.ReplaceAll(text, "  ", " ")
+	}
+	return strings.TrimSpace(text)
 }
 
 // wrapText wraps text to the specified width, breaking on word boundaries
