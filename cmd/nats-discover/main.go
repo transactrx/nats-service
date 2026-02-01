@@ -392,22 +392,41 @@ func outputServiceList(services []nats_service.ServiceInfo, format string) error
 			if svc.Description != "" {
 				fmt.Printf("description: %s\n", svc.Description)
 			}
+			if svc.RepositoryURL != "" {
+				fmt.Printf("repositoryUrl: %s\n", svc.RepositoryURL)
+			}
 			if svc.ApiDocsSubject != "" {
 				fmt.Printf("apiDocsSubject: %s\n", svc.ApiDocsSubject)
 			}
 		}
 	case "table":
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintf(w, "SERVICE\tSUBJECT PREFIX\tDESCRIPTION\n")
-		fmt.Fprintf(w, "-------\t--------------\t-----------\n")
-		for _, svc := range services {
-			desc := svc.Description
-			if len(desc) > 50 {
-				desc = desc[:47] + "..."
+		// Header
+		fmt.Printf("%-50s %-50s %s\n", "SERVICE", "SUBJECT PREFIX", "REPOSITORY")
+		fmt.Printf("%-50s %-50s %s\n", strings.Repeat("-", 50), strings.Repeat("-", 50), strings.Repeat("-", 100))
+
+		for i, svc := range services {
+			// Line 1: service, prefix, repo URL
+			serviceName := truncateString(svc.ServiceName, 50)
+			subjectPrefix := truncateString(svc.SubjectPrefix, 50)
+			repoURL := truncateString(svc.RepositoryURL, 100)
+			if repoURL == "" {
+				repoURL = "-"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", svc.ServiceName, svc.SubjectPrefix, desc)
+			fmt.Printf("%-50s %-50s %s\n", serviceName, subjectPrefix, repoURL)
+
+			// Line 2: description (wrapped)
+			if svc.Description != "" {
+				wrappedDesc := wrapText(svc.Description, 150)
+				for _, line := range wrappedDesc {
+					fmt.Printf("  %s\n", line)
+				}
+			}
+
+			// Empty line between services (but not after the last one)
+			if i < len(services)-1 {
+				fmt.Println()
+			}
 		}
-		w.Flush()
 	default:
 		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
 	}
@@ -433,6 +452,9 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 		fmt.Printf("subjectPrefix: %s\n", apiDocs.SubjectPrefix)
 		if apiDocs.Description != "" {
 			fmt.Printf("description: %s\n", apiDocs.Description)
+		}
+		if apiDocs.RepositoryURL != "" {
+			fmt.Printf("repositoryUrl: %s\n", apiDocs.RepositoryURL)
 		}
 		if len(apiDocs.StatusCodes) > 0 {
 			fmt.Println("statusCodes:")
@@ -517,6 +539,9 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 		if apiDocs.Description != "" {
 			fmt.Printf("Description: %s\n", apiDocs.Description)
 		}
+		if apiDocs.RepositoryURL != "" {
+			fmt.Printf("Repository: %s\n", apiDocs.RepositoryURL)
+		}
 		fmt.Println()
 		fmt.Fprintf(w, "SUBJECT PATTERN\tEXAMPLE\tDESCRIPTION\n")
 		fmt.Fprintf(w, "---------------\t-------\t-----------\n")
@@ -564,4 +589,43 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
 	}
 	return nil
+}
+
+// truncateString truncates a string to maxLen characters, adding "..." if truncated
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// wrapText wraps text to the specified width, breaking on word boundaries
+func wrapText(text string, width int) []string {
+	if len(text) <= width {
+		return []string{text}
+	}
+
+	var lines []string
+	words := strings.Fields(text)
+	var currentLine string
+
+	for _, word := range words {
+		if currentLine == "" {
+			currentLine = word
+		} else if len(currentLine)+1+len(word) <= width {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
+	}
+
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return lines
 }
