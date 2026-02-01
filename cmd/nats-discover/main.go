@@ -5,11 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -413,7 +414,8 @@ type AggregatedEndpointStats struct {
 
 // getServiceStats collects stats from all instances of a service
 func getServiceStats(nc *nats.Conn, serviceName string, timeout time.Duration) (*AggregatedStats, error) {
-	results := make([]nats_service.InstanceStatsResponse, 0)
+	// Use map to deduplicate by instance ID (in case of duplicate responses)
+	instanceMap := make(map[string]nats_service.InstanceStatsResponse)
 	var mu sync.Mutex
 
 	// Create an inbox for receiving responses
@@ -428,7 +430,12 @@ func getServiceStats(nc *nats.Conn, serviceName string, timeout time.Duration) (
 		if err := json.Unmarshal(msg.Data, &instanceStats); err != nil {
 			return // Skip malformed responses
 		}
-		results = append(results, instanceStats)
+		// Skip instances with empty ID (likely old service version without stats support)
+		if instanceStats.InstanceId == "" {
+			return
+		}
+		// Store by instance ID - last response wins if duplicates
+		instanceMap[instanceStats.InstanceId] = instanceStats
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to subscribe to inbox: %w", err)
@@ -449,9 +456,20 @@ func getServiceStats(nc *nats.Conn, serviceName string, timeout time.Duration) (
 	// Wait for responses
 	time.Sleep(timeout)
 
-	if len(results) == 0 {
+	if len(instanceMap) == 0 {
 		return nil, fmt.Errorf("no instances responded for service '%s'", serviceName)
 	}
+
+	// Convert map to slice
+	results := make([]nats_service.InstanceStatsResponse, 0, len(instanceMap))
+	for _, inst := range instanceMap {
+		results = append(results, inst)
+	}
+
+	// Sort by instance ID for consistent output
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].InstanceId < results[j].InstanceId
+	})
 
 	// Aggregate results
 	aggregated := &AggregatedStats{
@@ -571,26 +589,58 @@ func outputStats(stats *AggregatedStats, format string) error {
 		fmt.Printf("Service: %s\n", stats.ServiceName)
 		fmt.Printf("Instances: %d\n\n", stats.InstanceCount)
 
-		// Instance summary
+		// Get terminal width for dynamic sizing
+		termWidth := getTerminalWidth()
+
+		// Instance summary table
 		fmt.Println("INSTANCES:")
-		fmt.Printf("%-30s %-20s\n", "INSTANCE ID", "UPTIME")
-		fmt.Printf("%-30s %-20s\n", strings.Repeat("-", 30), strings.Repeat("-", 20))
-		for _, inst := range stats.Instances {
-			fmt.Printf("%-30s %-20s\n", truncateString(inst.InstanceId, 30), inst.Uptime)
+		instColWidths := []int{40, 15} // Instance ID, Uptime
+		fmt.Println(boxTopN(instColWidths))
+		fmt.Println(boxRowN(instColWidths, []string{"INSTANCE ID", "UPTIME"}))
+		fmt.Println(boxHeaderSepN(instColWidths))
+		for i, inst := range stats.Instances {
+			fmt.Println(boxRowN(instColWidths, []string{inst.InstanceId, inst.Uptime}))
+			if i < len(stats.Instances)-1 {
+				fmt.Println(boxRowSepN(instColWidths))
+			}
 		}
+		fmt.Println(boxBottomN(instColWidths))
 		fmt.Println()
 
-		// Aggregated endpoint stats
+		// Aggregated endpoint stats table
 		fmt.Println("AGGREGATED ENDPOINT STATS:")
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintf(w, "ENDPOINT\tSUCCESS\tFAILURES\tAVG(ms)\tMIN(ms)\tMAX(ms)\tP95 RANGE(ms)\n")
-		fmt.Fprintf(w, "--------\t-------\t--------\t-------\t-------\t-------\t-------------\n")
-		for _, ep := range stats.AggregatedEndpoints {
-			fmt.Fprintf(w, "%s\t%d\t%d\t%.2f\t%.2f\t%.2f\t%s\n",
-				ep.Subject, ep.TotalSuccess, ep.TotalFailures,
-				ep.AvgLatencyMs, ep.MinLatencyMs, ep.MaxLatencyMs, ep.P95Range)
+
+		// Calculate endpoint column width dynamically
+		availableWidth := termWidth - 10 // borders
+		numericColWidth := 10
+		numericCols := 5 // SUCCESS, FAILURES, AVG, MIN, MAX
+		p95ColWidth := 14
+		endpointColWidth := availableWidth - (numericCols * numericColWidth) - p95ColWidth - 14 // 14 for extra borders
+		if endpointColWidth < 40 {
+			endpointColWidth = 40
 		}
-		w.Flush()
+
+		statsColWidths := []int{endpointColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, p95ColWidth}
+		fmt.Println(boxTopN(statsColWidths))
+		fmt.Println(boxRowN(statsColWidths, []string{"ENDPOINT", "SUCCESS", "FAILURES", "AVG(ms)", "MIN(ms)", "MAX(ms)", "P95 RANGE"}))
+		fmt.Println(boxHeaderSepN(statsColWidths))
+
+		for i, ep := range stats.AggregatedEndpoints {
+			row := []string{
+				ep.Subject,
+				fmt.Sprintf("%d", ep.TotalSuccess),
+				fmt.Sprintf("%d", ep.TotalFailures),
+				fmt.Sprintf("%.2f", ep.AvgLatencyMs),
+				fmt.Sprintf("%.2f", ep.MinLatencyMs),
+				fmt.Sprintf("%.2f", ep.MaxLatencyMs),
+				ep.P95Range,
+			}
+			fmt.Println(boxRowN(statsColWidths, row))
+			if i < len(stats.AggregatedEndpoints)-1 {
+				fmt.Println(boxRowSepN(statsColWidths))
+			}
+		}
+		fmt.Println(boxBottomN(statsColWidths))
 
 	default:
 		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
@@ -764,7 +814,6 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 			}
 		}
 	case "table":
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Printf("Service: %s\n", apiDocs.ServiceName)
 		if apiDocs.Description != "" {
 			fmt.Printf("Description: %s%s%s\n", ansiDim, sanitizeText(apiDocs.Description), ansiReset)
@@ -772,51 +821,83 @@ func outputApiDocs(apiDocs *nats_service.ApiDocsResponse, format string) error {
 		if apiDocs.RepositoryURL != "" {
 			fmt.Printf("Repository: %s\n", apiDocs.RepositoryURL)
 		}
+		fmt.Printf("Endpoints: %d\n", len(apiDocs.Endpoints))
 		fmt.Println()
-		fmt.Fprintf(w, "SUBJECT PATTERN\tEXAMPLE\tDESCRIPTION\n")
-		fmt.Fprintf(w, "---------------\t-------\t-----------\n")
 
-		for _, ep := range apiDocs.Endpoints {
+		// Get terminal width and calculate dynamic column widths
+		termWidth := getTerminalWidth()
+		// Reserve space for borders: 4 vertical bars + 6 spaces (padding) = 10 chars
+		availableWidth := termWidth - 10
+		if availableWidth < 60 {
+			availableWidth = 60 // Minimum usable width
+		}
+
+		// Distribute width: Subject 40%, Example 10%, Description 50%
+		col1Width := availableWidth * 40 / 100
+		col2Width := availableWidth * 10 / 100
+		col3Width := availableWidth - col1Width - col2Width
+
+		// Set minimums
+		if col1Width < 40 {
+			col1Width = 40
+		}
+		if col2Width < 8 {
+			col2Width = 8
+		}
+		if col3Width < 40 {
+			col3Width = 40
+		}
+
+		// Draw table header
+		fmt.Println(boxTop(col1Width, col2Width, col3Width))
+		fmt.Println(boxRow(col1Width, col2Width, col3Width, "SUBJECT PATTERN", "EXAMPLE", "DESCRIPTION"))
+		fmt.Println(boxHeaderSep(col1Width, col2Width, col3Width))
+
+		for i, ep := range apiDocs.Endpoints {
+			// Build description with headers/params info
+			desc := ep.Description
+
+			// Add params and headers to description
+			var extras []string
+			if len(ep.Parameters) > 0 {
+				paramStrs := make([]string, 0, len(ep.Parameters))
+				for _, p := range ep.Parameters {
+					s := p.Name
+					if p.Required {
+						s += "*"
+					}
+					paramStrs = append(paramStrs, s)
+				}
+				extras = append(extras, "Params: "+strings.Join(paramStrs, ", "))
+			}
+			if len(ep.Headers) > 0 {
+				headerStrs := make([]string, 0, len(ep.Headers))
+				for _, h := range ep.Headers {
+					s := h.Name
+					if h.Required {
+						s += "*"
+					}
+					headerStrs = append(headerStrs, s)
+				}
+				extras = append(extras, "Headers: "+strings.Join(headerStrs, ", "))
+			}
+
 			example := ep.ExampleSubject
 			if example == "" {
 				example = "-"
 			}
-			// Sanitize description: replace newlines/tabs with spaces, collapse multiple spaces
-			desc := sanitizeText(ep.Description)
-			// Apply dim styling to description
-			if desc != "" {
-				desc = ansiDim + desc + ansiReset
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", ep.FullSubject, example, desc)
 
-			// Show parameters and headers
-			if len(ep.Parameters) > 0 {
-				paramDetails := make([]string, 0, len(ep.Parameters))
-				for _, p := range ep.Parameters {
-					detail := p.Name
-					if p.Required {
-						detail += "*"
-					}
-					if p.Description != "" {
-						detail += " (" + p.Description + ")"
-					}
-					paramDetails = append(paramDetails, detail)
-				}
-				fmt.Fprintf(w, "  Params: %s\t\t\n", strings.Join(paramDetails, ", "))
-			}
-			if len(ep.Headers) > 0 {
-				headerDetails := make([]string, 0, len(ep.Headers))
-				for _, h := range ep.Headers {
-					detail := h.Name
-					if h.Required {
-						detail += "*"
-					}
-					headerDetails = append(headerDetails, detail)
-				}
-				fmt.Fprintf(w, "  Headers: %s\t\t\n", strings.Join(headerDetails, ", "))
+			// Print the row (handles multi-line wrapping)
+			printBoxRow(col1Width, col2Width, col3Width, ep.FullSubject, example, desc, extras)
+
+			// Row separator (except after last row)
+			if i < len(apiDocs.Endpoints)-1 {
+				fmt.Println(boxRowSep(col1Width, col2Width, col3Width))
 			}
 		}
-		w.Flush()
+
+		// Draw table bottom
+		fmt.Println(boxBottom(col1Width, col2Width, col3Width))
 	default:
 		return fmt.Errorf("unknown format: %s (supported: table, json, yaml)", format)
 	}
@@ -873,4 +954,208 @@ func wrapText(text string, width int) []string {
 	}
 
 	return lines
+}
+
+// getTerminalWidth returns the current terminal width, defaulting to 150 if unavailable
+func getTerminalWidth() int {
+	// Try COLUMNS env var first
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if width, err := strconv.Atoi(cols); err == nil && width > 0 {
+			return width
+		}
+	}
+
+	// Try stty size (more reliable on macOS/Linux)
+	cmd := exec.Command("stty", "size")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err == nil {
+		parts := strings.Fields(strings.TrimSpace(string(out)))
+		if len(parts) >= 2 {
+			if width, err := strconv.Atoi(parts[1]); err == nil && width > 0 {
+				return width
+			}
+		}
+	}
+
+	// Fallback: try tput cols
+	cmd = exec.Command("tput", "cols")
+	cmd.Stdin = os.Stdin
+	out, err = cmd.Output()
+	if err == nil {
+		if width, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && width > 0 {
+			return width
+		}
+	}
+
+	return 150 // Default fallback (wider default)
+}
+
+// Box-drawing characters
+const (
+	boxHoriz      = "─"
+	boxVert       = "│"
+	boxTopLeft    = "┌"
+	boxTopRight   = "┐"
+	boxBottomLeft = "└"
+	boxBottomRight = "┘"
+	boxVertRight  = "├"
+	boxVertLeft   = "┤"
+	boxHorizDown  = "┬"
+	boxHorizUp    = "┴"
+	boxCross      = "┼"
+)
+
+// boxTop creates the top border of the table
+func boxTop(w1, w2, w3 int) string {
+	return boxTopLeft + strings.Repeat(boxHoriz, w1+2) + boxHorizDown + strings.Repeat(boxHoriz, w2+2) + boxHorizDown + strings.Repeat(boxHoriz, w3+2) + boxTopRight
+}
+
+// boxBottom creates the bottom border of the table
+func boxBottom(w1, w2, w3 int) string {
+	return boxBottomLeft + strings.Repeat(boxHoriz, w1+2) + boxHorizUp + strings.Repeat(boxHoriz, w2+2) + boxHorizUp + strings.Repeat(boxHoriz, w3+2) + boxBottomRight
+}
+
+// boxHeaderSep creates the separator between header and content
+func boxHeaderSep(w1, w2, w3 int) string {
+	return boxVertRight + strings.Repeat(boxHoriz, w1+2) + boxCross + strings.Repeat(boxHoriz, w2+2) + boxCross + strings.Repeat(boxHoriz, w3+2) + boxVertLeft
+}
+
+// boxRowSep creates the separator between rows
+func boxRowSep(w1, w2, w3 int) string {
+	return boxVertRight + strings.Repeat(boxHoriz, w1+2) + boxCross + strings.Repeat(boxHoriz, w2+2) + boxCross + strings.Repeat(boxHoriz, w3+2) + boxVertLeft
+}
+
+// boxRow creates a single-line row
+func boxRow(w1, w2, w3 int, c1, c2, c3 string) string {
+	return boxVert + " " + padRight(c1, w1) + " " + boxVert + " " + padRight(c2, w2) + " " + boxVert + " " + padRight(c3, w3) + " " + boxVert
+}
+
+// padRight pads a string to the specified width, truncating if necessary
+func padRight(s string, width int) string {
+	if len(s) > width {
+		if width > 3 {
+			return s[:width-3] + "..."
+		}
+		return s[:width]
+	}
+	return s + strings.Repeat(" ", width-len(s))
+}
+
+// N-column box drawing functions for variable column tables
+
+// boxTopN creates the top border for N columns
+func boxTopN(widths []int) string {
+	var b strings.Builder
+	b.WriteString(boxTopLeft)
+	for i, w := range widths {
+		b.WriteString(strings.Repeat(boxHoriz, w+2))
+		if i < len(widths)-1 {
+			b.WriteString(boxHorizDown)
+		}
+	}
+	b.WriteString(boxTopRight)
+	return b.String()
+}
+
+// boxBottomN creates the bottom border for N columns
+func boxBottomN(widths []int) string {
+	var b strings.Builder
+	b.WriteString(boxBottomLeft)
+	for i, w := range widths {
+		b.WriteString(strings.Repeat(boxHoriz, w+2))
+		if i < len(widths)-1 {
+			b.WriteString(boxHorizUp)
+		}
+	}
+	b.WriteString(boxBottomRight)
+	return b.String()
+}
+
+// boxHeaderSepN creates the header separator for N columns
+func boxHeaderSepN(widths []int) string {
+	var b strings.Builder
+	b.WriteString(boxVertRight)
+	for i, w := range widths {
+		b.WriteString(strings.Repeat(boxHoriz, w+2))
+		if i < len(widths)-1 {
+			b.WriteString(boxCross)
+		}
+	}
+	b.WriteString(boxVertLeft)
+	return b.String()
+}
+
+// boxRowSepN creates a row separator for N columns
+func boxRowSepN(widths []int) string {
+	return boxHeaderSepN(widths) // Same as header separator
+}
+
+// boxRowN creates a row with N columns
+func boxRowN(widths []int, values []string) string {
+	var b strings.Builder
+	b.WriteString(boxVert)
+	for i, w := range widths {
+		val := ""
+		if i < len(values) {
+			val = values[i]
+		}
+		b.WriteString(" ")
+		b.WriteString(padRight(val, w))
+		b.WriteString(" ")
+		b.WriteString(boxVert)
+	}
+	return b.String()
+}
+
+// printBoxRow prints a multi-line row with text wrapping
+func printBoxRow(w1, w2, w3 int, subject, example, desc string, extras []string) {
+	// Wrap each column
+	col1Lines := wrapText(subject, w1)
+	col2Lines := wrapText(example, w2)
+
+	// For description, wrap it and add extras as separate lines
+	col3Lines := wrapText(desc, w3)
+	for _, extra := range extras {
+		col3Lines = append(col3Lines, "") // blank line before extras
+		col3Lines = append(col3Lines, wrapText(extra, w3)...)
+	}
+
+	// Find the max number of lines
+	maxLines := len(col1Lines)
+	if len(col2Lines) > maxLines {
+		maxLines = len(col2Lines)
+	}
+	if len(col3Lines) > maxLines {
+		maxLines = len(col3Lines)
+	}
+
+	// Print each line
+	for i := 0; i < maxLines; i++ {
+		c1 := ""
+		c2 := ""
+		c3 := ""
+		if i < len(col1Lines) {
+			c1 = col1Lines[i]
+		}
+		if i < len(col2Lines) {
+			c2 = col2Lines[i]
+		}
+		if i < len(col3Lines) {
+			c3 = col3Lines[i]
+		}
+
+		// Apply dim to description column (col3)
+		c3Display := padRight(c3, w3)
+		if c3 != "" {
+			c3Display = ansiDim + c3Display + ansiReset
+		} else {
+			c3Display = padRight("", w3)
+		}
+
+		fmt.Printf("%s %s %s %s %s %s %s\n",
+			boxVert, padRight(c1, w1),
+			boxVert, padRight(c2, w2),
+			boxVert, c3Display, boxVert)
+	}
 }
