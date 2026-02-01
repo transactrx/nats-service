@@ -275,12 +275,25 @@ func myHandler(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 
 ## Endpoint Discovery
 
-Services automatically register for discovery. Use the `nats-discover` CLI to find all running services:
+Services automatically register for discovery. Use the `nats-discover` CLI to find all running services.
+
+### Installing nats-discover
+
+See [docs/nats-discover-installation.md](docs/nats-discover-installation.md) for installation instructions for macOS, Linux, and Windows.
+
+**Quick install (macOS):**
+```bash
+brew tap transactrx/tap && brew install nats-discover
+```
+
+**Quick install (Windows):**
+```powershell
+scoop bucket add transactrx https://github.com/transactrx/scoop-bucket && scoop install nats-discover
+```
+
+### Usage
 
 ```bash
-# Build the CLI
-go build -o nats-discover ./cmd/nats-discover
-
 # Discover services (table format)
 nats-discover -s nats://localhost:4222
 
