@@ -30,7 +30,7 @@ brews:
       owner: transactrx
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    folder: Formula
+    directory: Formula
     homepage: https://github.com/transactrx/nats-service
     description: CLI tool to discover NATS services using the nats-service framework
     license: MIT
