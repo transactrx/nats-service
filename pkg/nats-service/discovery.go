@@ -14,6 +14,9 @@ const DiscoverySubject = "_discovery.all"
 // ApiDocsSubjectSuffix is the suffix for the API documentation subject
 const ApiDocsSubjectSuffix = "_api_docs"
 
+// StatsSubjectSuffix is the suffix for the stats endpoint (no queue group - all instances respond)
+const StatsSubjectSuffix = "_stats"
+
 // ServiceInfo represents the basic service information returned by discovery
 type ServiceInfo struct {
 	ServiceName    string `json:"serviceName"`
@@ -39,6 +42,16 @@ type DiscoveryResponse struct {
 	ServiceName string        `json:"serviceName"`
 	BasePath    string        `json:"basePath"`
 	Endpoints   []EndpointDoc `json:"endpoints"`
+}
+
+// InstanceStatsResponse represents stats from a single service instance
+// This is returned by the _stats endpoint (broadcast to all instances)
+type InstanceStatsResponse struct {
+	ServiceName   string                  `json:"serviceName"`
+	InstanceId    string                  `json:"instanceId"`
+	SubjectPrefix string                  `json:"subjectPrefix"`
+	Uptime        string                  `json:"uptime"`
+	Endpoints     []EndpointStatsSnapshot `json:"endpoints"`
 }
 
 // HeaderDoc represents documentation for a single header
@@ -292,6 +305,75 @@ func (ns *NatService) drainDiscoverySubscription() error {
 	if ns.discoverySubscription != nil {
 		if err := ns.discoverySubscription.Drain(); err != nil {
 			log.Printf("Error draining discovery subscription: %v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// registerStatsEndpoint subscribes to the stats subject WITHOUT a queue group.
+// This means ALL instances will respond to stats requests, enabling aggregation.
+func (ns *NatService) registerStatsEndpoint() {
+	statsSubject := ns.basePath + "." + StatsSubjectSuffix
+
+	// Subscribe WITHOUT queue group so ALL instances respond
+	sub, err := ns.nc.Subscribe(statsSubject, ns.handleStatsRequest)
+	if err != nil {
+		log.Printf("WARNING: Unable to subscribe to stats subject '%s': %v. Stats will not be available.", statsSubject, err)
+		return
+	}
+
+	if !sub.IsValid() {
+		log.Printf("WARNING: Stats subscription to '%s' is invalid. Stats will not be available.", statsSubject)
+		return
+	}
+
+	log.Printf("Registered stats endpoint on subject: %s (broadcast, no queue)", statsSubject)
+	ns.statsSubscription = sub
+}
+
+// handleStatsRequest responds to stats requests with this instance's statistics
+func (ns *NatService) handleStatsRequest(msg *nats.Msg) {
+	// Build stats for all endpoints
+	endpointStats := make([]EndpointStatsSnapshot, 0, len(ns.endpointStats))
+	for _, stats := range ns.endpointStats {
+		endpointStats = append(endpointStats, stats.GetStats())
+	}
+
+	response := InstanceStatsResponse{
+		ServiceName:   ns.basePath,
+		InstanceId:    ns.instanceId,
+		SubjectPrefix: ns.basePath,
+		Uptime:        ns.getUptime(),
+		Endpoints:     endpointStats,
+	}
+
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Error marshaling stats response: %v", err)
+		return
+	}
+
+	if err := msg.Respond(jsonData); err != nil {
+		log.Printf("Error responding to stats request: %v", err)
+	}
+}
+
+// getOrCreateEndpointStats returns the stats tracker for an endpoint, creating it if needed
+func (ns *NatService) getOrCreateEndpointStats(path string) *EndPointStats {
+	if stats, ok := ns.endpointStats[path]; ok {
+		return stats
+	}
+	stats := NewEndPointStats(ns.basePath + "." + path)
+	ns.endpointStats[path] = stats
+	return stats
+}
+
+// drainStatsSubscription drains the stats subscription if it exists
+func (ns *NatService) drainStatsSubscription() error {
+	if ns.statsSubscription != nil {
+		if err := ns.statsSubscription.Drain(); err != nil {
+			log.Printf("Error draining stats subscription: %v", err)
 			return err
 		}
 	}
