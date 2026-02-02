@@ -2,8 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(docker-compose up -d nats)",
-      "Bash(NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -v ./pkg/nats-service)"
+      "Bash(NATS_URL=nats://localhost:4222 NATS_QUEUE_NAME=testing go test -v ./pkg/nats-service)",
+      "Bash(gh project item-create:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh run list:*)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": false
 }

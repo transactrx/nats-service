@@ -478,6 +478,7 @@ Ensure every endpoint has:
 
 ## Output Format
 Provide the complete code changes needed to fully document this service.
+try to create the document object in an external focuntion for example if the handler is call getOrders, there should be a function that returns the fully populated object called getOrdersDoc.
 ```
 
 ---
