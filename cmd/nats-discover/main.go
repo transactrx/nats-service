@@ -393,20 +393,22 @@ func getServiceApiDocs(nc *nats.Conn, serviceName string) (*nats_service.ApiDocs
 
 // AggregatedStats contains combined stats from all instances of a service
 type AggregatedStats struct {
-	ServiceName    string                              `json:"serviceName"`
-	InstanceCount  int                                 `json:"instanceCount"`
-	Instances      []nats_service.InstanceStatsResponse `json:"instances"`
-	AggregatedEndpoints []AggregatedEndpointStats      `json:"aggregatedEndpoints"`
+	ServiceName         string                               `json:"serviceName"`
+	InstanceCount       int                                  `json:"instanceCount"`
+	Instances           []nats_service.InstanceStatsResponse `json:"instances"`
+	AggregatedEndpoints []AggregatedEndpointStats            `json:"aggregatedEndpoints"`
 }
 
 // AggregatedEndpointStats contains combined stats for a single endpoint across all instances
 type AggregatedEndpointStats struct {
-	Subject       string  `json:"subject"`
-	TotalSuccess  int64   `json:"totalSuccess"`
-	TotalFailures int64   `json:"totalFailures"`
-	MinLatencyMs  float64 `json:"minLatencyMs"`
-	MaxLatencyMs  float64 `json:"maxLatencyMs"`
-	AvgLatencyMs  float64 `json:"avgLatencyMs"`
+	Subject          string  `json:"subject"`
+	TotalSuccess     int64   `json:"totalSuccess"`
+	TotalFailures    int64   `json:"totalFailures"`
+	TotalFailures4xx int64   `json:"totalFailures4xx,omitempty"` // Client errors (4xx)
+	TotalFailures5xx int64   `json:"totalFailures5xx,omitempty"` // Server errors (5xx)
+	MinLatencyMs     float64 `json:"minLatencyMs"`
+	MaxLatencyMs     float64 `json:"maxLatencyMs"`
+	AvgLatencyMs     float64 `json:"avgLatencyMs"`
 	// Per-instance percentiles (aggregating percentiles is statistically complex)
 	P50Range string `json:"p50RangeMs"`
 	P95Range string `json:"p95RangeMs"`
@@ -500,6 +502,8 @@ func getServiceStats(nc *nats.Conn, serviceName string, timeout time.Duration) (
 			agg := endpointMap[ep.Subject]
 			agg.TotalSuccess += ep.Success
 			agg.TotalFailures += ep.Failures
+			agg.TotalFailures4xx += ep.Failures4xx
+			agg.TotalFailures5xx += ep.Failures5xx
 
 			if ep.Latency.Min < agg.MinLatencyMs || agg.MinLatencyMs == 0 {
 				agg.MinLatencyMs = ep.Latency.Min
@@ -570,6 +574,10 @@ func outputStats(stats *AggregatedStats, format string) error {
 					fmt.Printf("      - subject: %s\n", ep.Subject)
 					fmt.Printf("        success: %d\n", ep.Success)
 					fmt.Printf("        failures: %d\n", ep.Failures)
+					if ep.Failures4xx > 0 || ep.Failures5xx > 0 {
+						fmt.Printf("        failures4xx: %d\n", ep.Failures4xx)
+						fmt.Printf("        failures5xx: %d\n", ep.Failures5xx)
+					}
 					fmt.Printf("        latency:\n")
 					fmt.Printf("          avgMs: %.2f\n", ep.Latency.Avg)
 					fmt.Printf("          p95Ms: %.2f\n", ep.Latency.P95)
@@ -581,6 +589,10 @@ func outputStats(stats *AggregatedStats, format string) error {
 			fmt.Printf("  - subject: %s\n", ep.Subject)
 			fmt.Printf("    totalSuccess: %d\n", ep.TotalSuccess)
 			fmt.Printf("    totalFailures: %d\n", ep.TotalFailures)
+			if ep.TotalFailures4xx > 0 || ep.TotalFailures5xx > 0 {
+				fmt.Printf("    totalFailures4xx: %d\n", ep.TotalFailures4xx)
+				fmt.Printf("    totalFailures5xx: %d\n", ep.TotalFailures5xx)
+			}
 			fmt.Printf("    avgLatencyMs: %.2f\n", ep.AvgLatencyMs)
 			fmt.Printf("    p95RangeMs: %s\n", ep.P95Range)
 		}
@@ -612,17 +624,17 @@ func outputStats(stats *AggregatedStats, format string) error {
 
 		// Calculate endpoint column width dynamically
 		availableWidth := termWidth - 10 // borders
-		numericColWidth := 10
-		numericCols := 5 // SUCCESS, FAILURES, AVG, MIN, MAX
+		numericColWidth := 8
+		numericCols := 7 // SUCCESS, FAIL, 4xx, 5xx, AVG, MIN, MAX
 		p95ColWidth := 14
-		endpointColWidth := availableWidth - (numericCols * numericColWidth) - p95ColWidth - 14 // 14 for extra borders
-		if endpointColWidth < 40 {
-			endpointColWidth = 40
+		endpointColWidth := availableWidth - (numericCols * numericColWidth) - p95ColWidth - 18 // 18 for extra borders
+		if endpointColWidth < 35 {
+			endpointColWidth = 35
 		}
 
-		statsColWidths := []int{endpointColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, p95ColWidth}
+		statsColWidths := []int{endpointColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, numericColWidth, p95ColWidth}
 		fmt.Println(boxTopN(statsColWidths))
-		fmt.Println(boxRowN(statsColWidths, []string{"ENDPOINT", "SUCCESS", "FAILURES", "AVG(ms)", "MIN(ms)", "MAX(ms)", "P95 RANGE"}))
+		fmt.Println(boxRowN(statsColWidths, []string{"ENDPOINT", "SUCCESS", "FAIL", "4xx", "5xx", "AVG(ms)", "MIN(ms)", "MAX(ms)", "P95 RANGE"}))
 		fmt.Println(boxHeaderSepN(statsColWidths))
 
 		for i, ep := range stats.AggregatedEndpoints {
@@ -630,6 +642,8 @@ func outputStats(stats *AggregatedStats, format string) error {
 				ep.Subject,
 				fmt.Sprintf("%d", ep.TotalSuccess),
 				fmt.Sprintf("%d", ep.TotalFailures),
+				fmt.Sprintf("%d", ep.TotalFailures4xx),
+				fmt.Sprintf("%d", ep.TotalFailures5xx),
 				fmt.Sprintf("%.2f", ep.AvgLatencyMs),
 				fmt.Sprintf("%.2f", ep.MinLatencyMs),
 				fmt.Sprintf("%.2f", ep.MaxLatencyMs),
@@ -993,17 +1007,17 @@ func getTerminalWidth() int {
 
 // Box-drawing characters
 const (
-	boxHoriz      = "─"
-	boxVert       = "│"
-	boxTopLeft    = "┌"
-	boxTopRight   = "┐"
-	boxBottomLeft = "└"
+	boxHoriz       = "─"
+	boxVert        = "│"
+	boxTopLeft     = "┌"
+	boxTopRight    = "┐"
+	boxBottomLeft  = "└"
 	boxBottomRight = "┘"
-	boxVertRight  = "├"
-	boxVertLeft   = "┤"
-	boxHorizDown  = "┬"
-	boxHorizUp    = "┴"
-	boxCross      = "┼"
+	boxVertRight   = "├"
+	boxVertLeft    = "┤"
+	boxHorizDown   = "┬"
+	boxHorizUp     = "┴"
+	boxCross       = "┼"
 )
 
 // boxTop creates the top border of the table
