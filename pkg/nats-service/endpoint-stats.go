@@ -17,8 +17,12 @@ const (
 type EndPointStats struct {
 	// Number of requests successfully processed
 	success atomic.Int64
-	// Number of requests that failed
+	// Number of requests that failed (total - kept for backwards compatibility)
 	failures atomic.Int64
+	// Number of requests that failed with 4xx status codes (client errors)
+	failures4xx atomic.Int64
+	// Number of requests that failed with 5xx status codes (server errors)
+	failures5xx atomic.Int64
 
 	// Latency tracking with bounded memory
 	latencyMu     sync.RWMutex
@@ -38,26 +42,28 @@ type EndPointStats struct {
 
 // LatencyStats contains computed latency statistics
 type LatencyStats struct {
-	Count   int64   `json:"count"`             // Total number of requests
-	Min     float64 `json:"minMs"`             // Minimum latency in milliseconds
-	Max     float64 `json:"maxMs"`             // Maximum latency in milliseconds
-	Avg     float64 `json:"avgMs"`             // Average latency in milliseconds
-	P50     float64 `json:"p50Ms"`             // 50th percentile (median)
-	P65     float64 `json:"p65Ms"`             // 65th percentile
-	P75     float64 `json:"p75Ms"`             // 75th percentile
-	P85     float64 `json:"p85Ms"`             // 85th percentile
-	P95     float64 `json:"p95Ms"`             // 95th percentile
-	Samples int     `json:"samplesInWindow"`   // Number of samples in current window
+	Count   int64   `json:"count"`           // Total number of requests
+	Min     float64 `json:"minMs"`           // Minimum latency in milliseconds
+	Max     float64 `json:"maxMs"`           // Maximum latency in milliseconds
+	Avg     float64 `json:"avgMs"`           // Average latency in milliseconds
+	P50     float64 `json:"p50Ms"`           // 50th percentile (median)
+	P65     float64 `json:"p65Ms"`           // 65th percentile
+	P75     float64 `json:"p75Ms"`           // 75th percentile
+	P85     float64 `json:"p85Ms"`           // 85th percentile
+	P95     float64 `json:"p95Ms"`           // 95th percentile
+	Samples int     `json:"samplesInWindow"` // Number of samples in current window
 }
 
 // EndpointStatsSnapshot contains a point-in-time snapshot of endpoint statistics
 type EndpointStatsSnapshot struct {
-	Subject   string       `json:"subject"`
-	Success   int64        `json:"success"`
-	Failures  int64        `json:"failures"`
-	Latency   LatencyStats `json:"latency"`
-	StartTime time.Time    `json:"startTime"`
-	Uptime    string       `json:"uptime"`
+	Subject     string       `json:"subject"`
+	Success     int64        `json:"success"`
+	Failures    int64        `json:"failures"`
+	Failures4xx int64        `json:"failures4xx,omitempty"` // Client errors (4xx status codes)
+	Failures5xx int64        `json:"failures5xx,omitempty"` // Server errors (5xx status codes)
+	Latency     LatencyStats `json:"latency"`
+	StartTime   time.Time    `json:"startTime"`
+	Uptime      string       `json:"uptime"`
 }
 
 // NewEndPointStats creates a new endpoint stats tracker with the default buffer size
@@ -81,12 +87,40 @@ func NewEndPointStatsWithBufferSize(subject string, bufferSize int) *EndPointSta
 
 // AddTransactionLatency records a transaction's latency and success/failure status
 // latency should be provided in microseconds for precision
+// Deprecated: Use AddTransactionLatencyWithStatus for more granular failure tracking
 func (s *EndPointStats) AddTransactionLatency(latencyMicros int64, success bool) {
 	if success {
 		s.success.Add(1)
 	} else {
 		s.failures.Add(1)
 	}
+
+	s.recordLatency(latencyMicros)
+}
+
+// AddTransactionLatencyWithStatus records a transaction's latency with the HTTP status code
+// for granular failure tracking (4xx vs 5xx errors)
+// latency should be provided in microseconds for precision
+// statusCode should be the HTTP-like status code (200, 400, 404, 500, etc.)
+func (s *EndPointStats) AddTransactionLatencyWithStatus(latencyMicros int64, statusCode int) {
+	if statusCode >= 200 && statusCode < 300 {
+		s.success.Add(1)
+	} else if statusCode >= 400 && statusCode < 500 {
+		s.failures.Add(1)
+		s.failures4xx.Add(1)
+	} else if statusCode >= 500 && statusCode < 600 {
+		s.failures.Add(1)
+		s.failures5xx.Add(1)
+	} else {
+		// For other status codes (3xx, 1xx), count as success (not a failure)
+		s.success.Add(1)
+	}
+
+	s.recordLatency(latencyMicros)
+}
+
+// recordLatency adds a latency sample to the circular buffer
+func (s *EndPointStats) recordLatency(latencyMicros int64) {
 
 	s.latencyMu.Lock()
 	defer s.latencyMu.Unlock()
@@ -110,8 +144,15 @@ func (s *EndPointStats) AddTransactionLatency(latencyMicros int64, success bool)
 }
 
 // AddTransactionLatencyDuration is a convenience method that accepts a time.Duration
+// Deprecated: Use AddTransactionLatencyDurationWithStatus for more granular failure tracking
 func (s *EndPointStats) AddTransactionLatencyDuration(latency time.Duration, success bool) {
 	s.AddTransactionLatency(latency.Microseconds(), success)
+}
+
+// AddTransactionLatencyDurationWithStatus is a convenience method that accepts a time.Duration
+// and HTTP status code for granular failure tracking
+func (s *EndPointStats) AddTransactionLatencyDurationWithStatus(latency time.Duration, statusCode int) {
+	s.AddTransactionLatencyWithStatus(latency.Microseconds(), statusCode)
 }
 
 // GetStats returns a snapshot of current endpoint statistics
@@ -120,11 +161,13 @@ func (s *EndPointStats) GetStats() EndpointStatsSnapshot {
 	defer s.latencyMu.RUnlock()
 
 	snapshot := EndpointStatsSnapshot{
-		Subject:   s.subject,
-		Success:   s.success.Load(),
-		Failures:  s.failures.Load(),
-		StartTime: s.startDateTime,
-		Uptime:    time.Since(s.startDateTime).Round(time.Second).String(),
+		Subject:     s.subject,
+		Success:     s.success.Load(),
+		Failures:    s.failures.Load(),
+		Failures4xx: s.failures4xx.Load(),
+		Failures5xx: s.failures5xx.Load(),
+		StartTime:   s.startDateTime,
+		Uptime:      time.Since(s.startDateTime).Round(time.Second).String(),
 	}
 
 	// Calculate latency stats
@@ -207,6 +250,8 @@ func (s *EndPointStats) percentile(sorted []int64, p int) int64 {
 func (s *EndPointStats) Reset() {
 	s.success.Store(0)
 	s.failures.Store(0)
+	s.failures4xx.Store(0)
+	s.failures5xx.Store(0)
 
 	s.latencyMu.Lock()
 	defer s.latencyMu.Unlock()
@@ -229,9 +274,19 @@ func (s *EndPointStats) GetSuccessCount() int64 {
 	return s.success.Load()
 }
 
-// GetFailureCount returns the number of failed requests
+// GetFailureCount returns the number of failed requests (all failures)
 func (s *EndPointStats) GetFailureCount() int64 {
 	return s.failures.Load()
+}
+
+// GetFailure4xxCount returns the number of client error failures (4xx status codes)
+func (s *EndPointStats) GetFailure4xxCount() int64 {
+	return s.failures4xx.Load()
+}
+
+// GetFailure5xxCount returns the number of server error failures (5xx status codes)
+func (s *EndPointStats) GetFailure5xxCount() int64 {
+	return s.failures5xx.Load()
 }
 
 // GetTotalCount returns the total number of requests (success + failures)

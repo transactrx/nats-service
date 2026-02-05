@@ -454,9 +454,15 @@ func (ns *NatService) handleEndpointCall(endPoint *NatsEndpoint, msg *nats.Msg) 
 		natsMessage.Logger.Printf("error returning response: %v", errResponding)
 	}
 
-	// Track endpoint stats
+	// Track endpoint stats with status code for granular failure tracking
 	stats := ns.getOrCreateEndpointStats(endPoint.path)
-	stats.AddTransactionLatency(elapsedTime, err == nil)
+	var statusCode int
+	if err != nil {
+		statusCode = err.Status
+	} else {
+		statusCode = 200
+	}
+	stats.AddTransactionLatencyWithStatus(elapsedTime, statusCode)
 
 	if ns.debug {
 		natsMessage.Logger.Printf("apiStatus: %s, user:%s latency: %dμs, sub: %s, req:%s, resp: %s", status, natsMessage.UserId, elapsedTime, msg.Subject, reqMsgLog, responseMsgLog)
