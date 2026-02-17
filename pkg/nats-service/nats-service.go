@@ -480,6 +480,20 @@ func (ns *NatService) createNatsMessageFromRequest(endpoint *NatsEndpoint, msg *
 		userId = ""
 		messageId = uuid.New().String()
 	}
+	// Check if request data was chunked - reassemble before decompression
+	if msg.Header != nil && msg.Header.Get(nats_service_common.CHUNKED_SUBJECT) != "" {
+		chunkSubject := msg.Header.Get(nats_service_common.CHUNKED_SUBJECT)
+		chunksId := msg.Header.Get(nats_service_common.CHUNKS_ID)
+		chunksCount := msg.Header.Get(nats_service_common.CHUNKED_LENGTH)
+		logger := createLogger(messageId)
+
+		assembledData, err := ns.downloadRequestChunks(chunkSubject, messageId, chunksId, chunksCount, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download request chunks: %w", err)
+		}
+		msg.Data = assembledData
+	}
+
 	if msg.Header != nil && msg.Header.Get(nats_service_common.COMPRESSED_HEADER) == nats_service_common.GZIP_COMPRESSION_TYPE {
 		bytes, err := nats_service_common.GUnzipBytes(msg.Data)
 		if err != nil {
