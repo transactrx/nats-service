@@ -1,6 +1,7 @@
 package nats_service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,4 +203,47 @@ func (ns *NatService) validateAndGetChunkRequestInfo(chunkReq *nats.Msg) (string
 
 	return chunkReq.Header.Get(nats_service_common.CHUNKS_ID), chunkIndex, createLogger(msgId), nil
 
+}
+
+// downloadRequestChunks downloads chunked request data from the client.
+// This mirrors the client-side downloadChunks but runs on the server to
+// reassemble chunked request payloads.
+func (ns *NatService) downloadRequestChunks(subject, messageId, chunksId, count string, logger *log.Logger) ([]byte, error) {
+	chunksCount, err := strconv.Atoi(count)
+	if err != nil {
+		logger.Printf("Error parsing request chunks count: %s", err)
+		return nil, err
+	}
+
+	buff := bytes.NewBuffer(nil)
+
+	for i := 0; i < chunksCount; i++ {
+		request := nats.Msg{
+			Subject: subject,
+			Header:  nats.Header{},
+		}
+
+		request.Header.Set(nats_service_common.CHUNKS_ID, chunksId)
+		request.Header.Set(nats_service_common.CHUNK_INDEX, strconv.Itoa(i))
+		request.Header.Set(nats_service_common.MESSAGE_ID, messageId)
+
+		msg, err := ns.nc.RequestMsg(&request, 30*time.Second)
+		if err != nil {
+			logger.Printf("Error downloading request chunk %d: %s", i, err)
+			return nil, err
+		}
+
+		if msg.Header.Get(nats_service_common.STATUS) == "200" {
+			buff.Write(msg.Data)
+		} else {
+			natsError := &NatsServiceError{}
+			parsError := json.Unmarshal(msg.Data, natsError)
+			if parsError != nil {
+				return nil, fmt.Errorf("invalid response from client chunk server: %s, %w", msg.Data, parsError)
+			}
+			return nil, fmt.Errorf("unable to retrieve request chunk %d: %v", i, natsError)
+		}
+	}
+
+	return buff.Bytes(), nil
 }

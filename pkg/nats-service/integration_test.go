@@ -635,6 +635,140 @@ func testApiDocsEndpoint(t *testing.T, nc *nats.Conn) {
 	}
 }
 
+// TestRequestChunking verifies that large request payloads are chunked by the client
+// and reassembled by the server before the handler sees them.
+func TestRequestChunking(t *testing.T) {
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+
+	queueName := os.Getenv("NATS_QUEUE_NAME")
+	if queueName == "" {
+		queueName = "testing-chunked-req"
+	}
+
+	// Use small thresholds so we trigger chunking without needing huge payloads.
+	// compress threshold: 512 bytes, chunk threshold: 1024 bytes
+	maxCompress := 512
+	maxChunk := 1024
+
+	natService, err := nats_service.NewLowLevelDebug("chunkreq.api", queueName, natsURL, "", "", maxCompress, 1024*300, true)
+	if err != nil {
+		t.Skipf("Skipping test as NATS is not available: %v", err)
+		return
+	}
+
+	// Echo handler: returns request body as-is so we can verify round-trip integrity
+	echoHandler := func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+		msg.Logger.Printf("echo handler received %d bytes", len(msg.Body))
+		msg.ResponseBody = msg.Body
+		return nil
+	}
+
+	err = natService.AddEndpoint("echo", echoHandler)
+	if err != nil {
+		t.Fatalf("Failed to add echo endpoint: %v", err)
+	}
+
+	err = natService.Start()
+	if err != nil {
+		t.Fatalf("Failed to start service: %v", err)
+	}
+	defer natService.Shutdown()
+
+	// Client with the same small chunk threshold
+	client, err := nats_service_client.NewLowLevelClientWithChunkingAndCompressionDebug(natsURL, maxCompress, maxChunk, "", "", true)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	t.Run("ChunkedRequestRoundTrip", func(t *testing.T) {
+		// Build a payload that exceeds the chunk threshold after compression.
+		// Random-ish data compresses poorly, so 4KB of this will stay above 1024 after gzip.
+		payload := make([]byte, 4096)
+		for i := range payload {
+			payload[i] = byte(i % 251) // prime modulus → low repetition → poor compression
+		}
+
+		response, natsError, err := client.DoRequest("", "chunkreq.api.echo", nil, payload, 10*time.Second)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		if natsError != nil {
+			t.Fatalf("Request returned NATS error: %v", natsError)
+		}
+		if response == nil {
+			t.Fatal("Response is nil")
+		}
+		if len(response.Data) != len(payload) {
+			t.Fatalf("Response length mismatch: got %d, want %d", len(response.Data), len(payload))
+		}
+		for i := range payload {
+			if response.Data[i] != payload[i] {
+				t.Fatalf("Response data mismatch at byte %d: got %d, want %d", i, response.Data[i], payload[i])
+			}
+		}
+	})
+
+	t.Run("SmallRequestNotChunked", func(t *testing.T) {
+		// A payload under the chunk threshold should still work normally
+		payload := []byte("hello, small request")
+
+		response, natsError, err := client.DoRequest("", "chunkreq.api.echo", nil, payload, 5*time.Second)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		if natsError != nil {
+			t.Fatalf("Request returned NATS error: %v", natsError)
+		}
+		if string(response.Data) != string(payload) {
+			t.Errorf("Expected %q, got %q", string(payload), string(response.Data))
+		}
+	})
+
+	t.Run("CompressedButNotChunked", func(t *testing.T) {
+		// Highly compressible data that exceeds compress threshold but compresses
+		// well below the chunk threshold → compression only, no chunking
+		payload := []byte(strings.Repeat("AAAA", 256)) // 1024 bytes, compresses to ~30 bytes
+
+		response, natsError, err := client.DoRequest("", "chunkreq.api.echo", nil, payload, 5*time.Second)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		if natsError != nil {
+			t.Fatalf("Request returned NATS error: %v", natsError)
+		}
+		if string(response.Data) != string(payload) {
+			t.Errorf("Response mismatch: got %d bytes, want %d bytes", len(response.Data), len(payload))
+		}
+	})
+
+	t.Run("LargeChunkedRequest", func(t *testing.T) {
+		// Larger payload → multiple chunks to verify multi-chunk reassembly
+		payload := make([]byte, 16384)
+		for i := range payload {
+			payload[i] = byte((i * 7) % 253)
+		}
+
+		response, natsError, err := client.DoRequest("", "chunkreq.api.echo", nil, payload, 15*time.Second)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		if natsError != nil {
+			t.Fatalf("Request returned NATS error: %v", natsError)
+		}
+		if len(response.Data) != len(payload) {
+			t.Fatalf("Response length mismatch: got %d, want %d", len(response.Data), len(payload))
+		}
+		for i := range payload {
+			if response.Data[i] != payload[i] {
+				t.Fatalf("Response data mismatch at byte %d", i)
+			}
+		}
+	})
+}
+
 // testReservedEndpointRejection verifies that users cannot register endpoints with reserved suffixes
 func testReservedEndpointRejection(t *testing.T, natsURL, queueName string) {
 	natService, err := nats_service.NewLowLevelDebug("reserved.test.api", queueName+"-reserved", natsURL, "", "", 1024*2, 1024*300, false)

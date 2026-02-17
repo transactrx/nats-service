@@ -170,6 +170,19 @@ func (cl *Client) DoRequest(correlationId, subject string, header Header, data [
 
 	logger := log.New(os.Stdout, correlationId+" - ", log.Ltime|log.Ldate|log.Lshortfile|log.Lmsgprefix)
 	startTime := time.Now().UnixMicro()
+
+	// If data exceeds chunk threshold, serve chunks via a temporary subscription
+	var chunkSub *nats.Subscription
+	if len(data) > cl.maxSizeBeforeChunk {
+		var err error
+		chunkSub, err = cl.setupRequestChunkServing(data, &requestMsg, logger)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to setup request chunk serving: %w", err)
+		}
+		defer chunkSub.Unsubscribe()
+		data = nil // chunk metadata is in headers; no data in the main request
+	}
+
 	var reqErr error
 	var msg *nats.Msg
 
@@ -322,6 +335,57 @@ func convertNatsHeaderToHeader(header nats.Header) Header {
 	}
 
 	return nil
+}
+
+// setupRequestChunkServing splits data into chunks, subscribes to a temporary
+// subject to serve chunk download requests, and sets the chunk metadata headers
+// on the outgoing request message. The caller must defer Unsubscribe on the
+// returned subscription.
+func (cl *Client) setupRequestChunkServing(data []byte, requestMsg *nats.Msg, logger *log.Logger) (*nats.Subscription, error) {
+	chunks := nats_service_common.ChunkByteArray(data, cl.maxSizeBeforeChunk)
+	chunksId := uuid.New().String()
+	chunkSubject := nats.NewInbox()
+
+	sub, err := cl.nc.Subscribe(chunkSubject, func(msg *nats.Msg) {
+		indexStr := ""
+		if msg.Header != nil {
+			indexStr = msg.Header.Get(nats_service_common.CHUNK_INDEX)
+		}
+		index, err := strconv.Atoi(indexStr)
+		if err != nil || index < 0 || index >= len(chunks) {
+			resp := nats.Msg{Header: nats.Header{}}
+			resp.Header.Set(nats_service_common.STATUS, "400")
+			natsErr := nats_service.NatsServiceError{
+				Status:       400,
+				ErrorMessage: fmt.Sprintf("invalid chunk index: %s", indexStr),
+			}
+			resp.Data, _ = json.Marshal(natsErr)
+			msg.RespondMsg(&resp)
+			return
+		}
+		if cl.debug {
+			logger.Printf("Serving request chunk %d/%d", index+1, len(chunks))
+		}
+		resp := nats.Msg{
+			Data:   chunks[index],
+			Header: nats.Header{},
+		}
+		resp.Header.Set(nats_service_common.STATUS, "200")
+		msg.RespondMsg(&resp)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	requestMsg.Header.Set(nats_service_common.CHUNKED_SUBJECT, chunkSubject)
+	requestMsg.Header.Set(nats_service_common.CHUNKED_LENGTH, strconv.Itoa(len(chunks)))
+	requestMsg.Header.Set(nats_service_common.CHUNKS_ID, chunksId)
+
+	if cl.debug {
+		logger.Printf("Request data chunked into %d chunks (chunkSubject: %s)", len(chunks), chunkSubject)
+	}
+
+	return sub, nil
 }
 
 func setupConnOptions(opts []nats.Option) []nats.Option {
