@@ -574,6 +574,14 @@ func (ns *NatService) Shutdown() error {
 }
 
 func (ns *NatService) respondToRequest(req *nats.Msg, responseMsg *nats.Msg) error {
+	// NATS Publish/PublishMsg messages intentionally have no reply subject. They
+	// are fire-and-forget deliveries, so processing the endpoint is the complete
+	// operation and there is nowhere to send a response. Avoid calling
+	// RespondMsg in that case: NATS returns ErrMsgNoReply, which previously
+	// produced a misleading error log for every successfully processed event.
+	if req == nil || req.Reply == "" {
+		return nil
+	}
 
 	//if it is small enough, then we send it back
 	if len(responseMsg.Data) < ns.maxRespSizeToChunk {

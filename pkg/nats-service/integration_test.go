@@ -52,6 +52,15 @@ func TestNATSIntegration(t *testing.T) {
 		t.Fatalf("Failed to add getCompressedResponse endpoint: %v", err)
 	}
 
+	fireAndForgetHandled := make(chan struct{}, 1)
+	err = natService.AddEndpoint("collect", func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
+		fireAndForgetHandled <- struct{}{}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to add collect endpoint: %v", err)
+	}
+
 	// Add parameterized endpoint
 	paramHandler := func(msg *nats_service.NatsMessage) *nats_service.NatsServiceError {
 		userID := msg.Parameters["userId"]
@@ -102,6 +111,31 @@ func TestNATSIntegration(t *testing.T) {
 	t.Run("TestParameterizedEndpoint", func(t *testing.T) {
 		testParameterizedEndpoint(t, natService, client)
 	})
+
+	t.Run("TestFireAndForgetViaPublish", func(t *testing.T) {
+		testFireAndForgetViaPublish(t, natsURL, fireAndForgetHandled)
+	})
+}
+
+func testFireAndForgetViaPublish(t *testing.T, natsURL string, handled <-chan struct{}) {
+	conn, err := nats.Connect(natsURL)
+	if err != nil {
+		t.Fatalf("failed to create publisher: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Publish("rx.api.collect", []byte("event")); err != nil {
+		t.Fatalf("failed to publish fire-and-forget message: %v", err)
+	}
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("failed to flush fire-and-forget message: %v", err)
+	}
+
+	select {
+	case <-handled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fire-and-forget endpoint was not handled")
+	}
 }
 
 func testGetTimeViaClient(t *testing.T, client *nats_service_client.Client) {
