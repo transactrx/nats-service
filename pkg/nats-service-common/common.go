@@ -3,6 +3,7 @@ package nats_service_common
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"log"
 )
 
@@ -35,13 +36,18 @@ func GZipBytes(toBegzipped []byte) []byte {
 
 func GUnzipBytes(toUnzip []byte) ([]byte, error) {
 	b := bytes.NewBuffer(toUnzip)
-	var r *gzip.Reader
 
-	r, _ = gzip.NewReader(b)
+	r, err := gzip.NewReader(b)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
 	defer r.Close()
 
 	var out bytes.Buffer
-	_, err := out.ReadFrom(r)
+	_, err = out.ReadFrom(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read gzip data: %w", err)
+	}
 	return out.Bytes(), err
 }
 
